@@ -966,6 +966,7 @@ dependencies = [
  "global-hotkey",
  "image",
  "imageproc",
+ "libc",
  "muda",
  "open",
  "serde",

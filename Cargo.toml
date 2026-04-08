@@ -17,6 +17,7 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 ab_glyph = "0.2"
 imageproc = "0.26"
 clap = { version = "4", features = ["derive"] }
+libc = "0.2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
