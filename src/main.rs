@@ -1,4 +1,5 @@
 mod config;
+mod github;
 mod types;
 
 fn main() {
