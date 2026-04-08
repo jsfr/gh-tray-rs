@@ -158,7 +158,7 @@ fn local_time_now() -> String {
             w_milliseconds: u16,
         }
 
-        extern "system" {
+        unsafe extern "system" {
             fn GetLocalTime(lp_system_time: *mut SystemTime);
         }
 
