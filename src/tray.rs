@@ -20,13 +20,13 @@ pub fn status_prefix(pr: &PullRequest) -> &'static str {
         &pr.check_status,
         &pr.review_status,
     ) {
-        (true, _, _, _) => "\u{1F6A7} ",                          // 🚧 Draft
-        (_, true, _, _) => "\u{2694}\u{FE0F} ",                   // ⚔️ Conflicts
-        (_, _, Some(CheckStatus::Failure), _) => "\u{274C} ",     // ❌ Check failure
+        (true, _, _, _) => "\u{1F6A7} ",                      // 🚧 Draft
+        (_, true, _, _) => "\u{2694}\u{FE0F} ",               // ⚔️ Conflicts
+        (_, _, Some(CheckStatus::Failure), _) => "\u{274C} ", // ❌ Check failure
         (_, _, _, Some(ReviewStatus::ChangesRequested)) => "\u{1F44E} ", // 👎 Changes requested
-        (_, _, Some(CheckStatus::Pending), _) => "\u{23F3} ",     // ⏳ Check pending
-        (_, _, _, Some(ReviewStatus::Approved)) => "\u{1F44D} ",  // 👍 Approved
-        (_, _, Some(CheckStatus::Success), _) => "\u{2705} ",     // ✅ Check success
+        (_, _, Some(CheckStatus::Pending), _) => "\u{23F3} ", // ⏳ Check pending
+        (_, _, _, Some(ReviewStatus::Approved)) => "\u{1F44D} ", // 👍 Approved
+        (_, _, Some(CheckStatus::Success), _) => "\u{2705} ", // ✅ Check success
         _ => "",
     }
 }
@@ -64,8 +64,7 @@ pub fn render_icon(text: &str, is_dark: bool) -> Icon {
 
     // Draw text centered on the circle
     let font_data = include_bytes!("../assets/Inter-Bold.ttf");
-    let font =
-        ab_glyph::FontRef::try_from_slice(font_data).expect("Failed to load embedded font");
+    let font = ab_glyph::FontRef::try_from_slice(font_data).expect("Failed to load embedded font");
 
     let scale = if text.len() > 2 { 14.0 } else { 18.0 };
 

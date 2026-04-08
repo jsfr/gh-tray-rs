@@ -1,8 +1,8 @@
 use std::path::Path;
 use tracing::Level;
+use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt;
 use tracing_subscriber::prelude::*;
-use tracing_subscriber::EnvFilter;
 
 pub fn init(level: Level, log_file: Option<&Path>) {
     let filter = EnvFilter::new(level.as_str());

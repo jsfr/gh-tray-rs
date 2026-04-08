@@ -9,6 +9,7 @@ pub enum CheckStatus {
 pub enum ReviewStatus {
     Approved,
     ChangesRequested,
+    #[expect(dead_code)]
     ReviewRequired,
 }
 

@@ -10,7 +10,9 @@ pub fn run_gh(token: Option<&str>, args: &[&str]) -> Result<String, String> {
         cmd.env("GH_TOKEN", t);
     }
 
-    let output = cmd.output().map_err(|e| format!("Failed to start gh: {e}"))?;
+    let output = cmd
+        .output()
+        .map_err(|e| format!("Failed to start gh: {e}"))?;
 
     if output.status.success() {
         String::from_utf8(output.stdout)
@@ -90,9 +92,7 @@ fn parse_response(json: &str, username: &str) -> Result<PullRequestGroup, String
         serde_json::from_str(json).map_err(|e| format!("Failed to parse JSON: {e}"))?;
 
     let nodes = &doc["data"]["search"]["nodes"];
-    let nodes = nodes
-        .as_array()
-        .ok_or("Expected nodes array in response")?;
+    let nodes = nodes.as_array().ok_or("Expected nodes array in response")?;
 
     let mut mine = Vec::new();
     let mut review_requested = Vec::new();
@@ -108,10 +108,7 @@ fn parse_response(json: &str, username: &str) -> Result<PullRequestGroup, String
 
         if author.eq_ignore_ascii_case(username) {
             mine.push(pr);
-        } else if reviewers
-            .iter()
-            .any(|r| r.eq_ignore_ascii_case(username))
-        {
+        } else if reviewers.iter().any(|r| r.eq_ignore_ascii_case(username)) {
             review_requested.push(pr);
         } else {
             involved.push(pr);

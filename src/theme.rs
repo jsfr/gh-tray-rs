@@ -28,8 +28,8 @@ fn is_dark_macos() -> bool {
 
 #[cfg(target_os = "windows")]
 fn is_dark_windows() -> bool {
-    use winreg::enums::HKEY_CURRENT_USER;
     use winreg::RegKey;
+    use winreg::enums::HKEY_CURRENT_USER;
 
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let key = hkcu

@@ -66,11 +66,7 @@ impl ApplicationHandler for App {
                     tray::MenuAction::ToggleAutoStart => {
                         if let Some(al) = &self.auto_launch {
                             let new_state = !self.auto_start_enabled;
-                            let result = if new_state {
-                                al.enable()
-                            } else {
-                                al.disable()
-                            };
+                            let result = if new_state { al.enable() } else { al.disable() };
                             if result.is_ok() {
                                 self.auto_start_enabled = new_state;
                             }
@@ -128,7 +124,7 @@ impl App {
         );
         self.menu_actions = actions;
         if let Some(tray) = &self.tray_icon {
-            let _ = tray.set_menu(Some(Box::new(menu)));
+            tray.set_menu(Some(Box::new(menu)));
         }
     }
 }
@@ -199,12 +195,12 @@ fn main() {
     };
 
     // Validate auth
-    if !cli.demo {
-        if let Err(e) = github::validate_auth(token.as_deref()) {
-            eprintln!("gh CLI authentication failed: {e}");
-            eprintln!("Please run 'gh auth login' first.");
-            std::process::exit(1);
-        }
+    if !cli.demo
+        && let Err(e) = github::validate_auth(token.as_deref())
+    {
+        eprintln!("gh CLI authentication failed: {e}");
+        eprintln!("Please run 'gh auth login' first.");
+        std::process::exit(1);
     }
 
     let event_loop = EventLoop::new().expect("Failed to create event loop");
@@ -283,8 +279,11 @@ fn main() {
     // Register global hotkey
     let _hotkey_manager = GlobalHotKeyManager::new().ok();
     let _registered_hotkey = _hotkey_manager.as_ref().and_then(|manager| {
-        config.hotkey.parse::<HotKey>().ok().and_then(|hk| {
-            match manager.register(hk) {
+        config
+            .hotkey
+            .parse::<HotKey>()
+            .ok()
+            .and_then(|hk| match manager.register(hk) {
                 Ok(()) => {
                     tracing::info!("Global hotkey registered: {}", config.hotkey);
                     Some(hk)
@@ -293,8 +292,7 @@ fn main() {
                     tracing::warn!("Failed to register hotkey '{}': {e}", config.hotkey);
                     None
                 }
-            }
-        })
+            })
     });
 
     let mut app = App {
