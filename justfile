@@ -18,3 +18,6 @@ check:
 
 test:
     cargo test
+
+changelog:
+    git cliff -o CHANGELOG.md
