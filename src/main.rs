@@ -15,8 +15,9 @@ use std::sync::mpsc;
 use std::time::Duration;
 use tray_icon::TrayIconBuilder;
 use winit::application::ApplicationHandler;
+use winit::event::StartCause;
 use winit::event::WindowEvent;
-use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::event_loop::{ActiveEventLoop, EventLoopBuilder};
 use winit::window::WindowId;
 
 #[derive(Parser)]
@@ -45,6 +46,26 @@ struct App {
 }
 
 impl ApplicationHandler for App {
+    fn new_events(&mut self, _event_loop: &ActiveEventLoop, cause: StartCause) {
+        if cause == StartCause::Init {
+            // Create tray icon here — on macOS it must be created after the event loop starts
+            let is_dark = theme::is_dark_theme();
+            let icon = tray::render_icon("...", is_dark);
+            let (loading_menu, loading_actions) =
+                tray::build_menu(&types::PullRequestGroup::default(), false, None, false);
+
+            let tray_icon = TrayIconBuilder::new()
+                .with_icon(icon)
+                .with_menu(Box::new(loading_menu))
+                .with_tooltip("gh-tray: loading...")
+                .build()
+                .expect("Failed to create tray icon");
+
+            self.tray_icon = Some(tray_icon);
+            self.menu_actions = loading_actions;
+        }
+    }
+
     fn resumed(&mut self, _event_loop: &ActiveEventLoop) {}
 
     fn window_event(
@@ -203,20 +224,14 @@ fn main() {
         std::process::exit(1);
     }
 
-    let event_loop = EventLoop::new().expect("Failed to create event loop");
-
-    // Create initial tray icon with loading state
-    let is_dark = theme::is_dark_theme();
-    let icon = tray::render_icon("...", is_dark);
-    let (loading_menu, loading_actions) =
-        tray::build_menu(&types::PullRequestGroup::default(), false, None, false);
-
-    let tray_icon = TrayIconBuilder::new()
-        .with_icon(icon)
-        .with_menu(Box::new(loading_menu))
-        .with_tooltip("gh-tray: loading...")
-        .build()
-        .expect("Failed to create tray icon");
+    // Build event loop — on macOS, set Accessory policy to hide from Dock
+    let mut builder = EventLoopBuilder::default();
+    #[cfg(target_os = "macos")]
+    {
+        use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
+        builder.with_activation_policy(ActivationPolicy::Accessory);
+    }
+    let event_loop = builder.build().expect("Failed to create event loop");
 
     // Set up auto-launch
     let exe_path = std::env::current_exe()
@@ -296,8 +311,8 @@ fn main() {
     });
 
     let mut app = App {
-        tray_icon: Some(tray_icon),
-        menu_actions: loading_actions,
+        tray_icon: None, // Created in new_events after event loop starts
+        menu_actions: std::collections::HashMap::new(),
         last_group: types::PullRequestGroup::default(),
         rx,
         auto_launch,
