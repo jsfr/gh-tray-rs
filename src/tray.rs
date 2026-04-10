@@ -62,18 +62,32 @@ pub fn render_icon(text: &str, is_dark: bool) -> Icon {
         }
     }
 
-    // Draw text centered on the circle
+    // Draw text centered on the circle using font metrics
     let font_data = include_bytes!("../assets/Inter-Bold.ttf");
     let font = ab_glyph::FontRef::try_from_slice(font_data).expect("Failed to load embedded font");
 
-    let scale = if text.len() > 2 { 14.0 } else { 18.0 };
+    use ab_glyph::{Font, ScaleFont};
+    let scale = if text.len() > 2 { 18.0 } else { 24.0 };
+    let px_scale = ab_glyph::PxScale::from(scale);
+    let scaled_font = font.as_scaled(px_scale);
 
-    // Approximate centering
-    let text_width = text.len() as f32 * scale * 0.55;
-    let x_offset = ((size as f32 - text_width) / 2.0).max(0.0) as i32;
-    let y_offset = ((size as f32 - scale) / 2.0 - 1.0).max(0.0) as i32;
+    // Measure actual text width using glyph advances
+    let text_width: f32 = text
+        .chars()
+        .map(|c| {
+            let glyph_id = scaled_font.glyph_id(c);
+            scaled_font.h_advance(glyph_id)
+        })
+        .sum();
 
-    imageproc::drawing::draw_text_mut(&mut img, fg, x_offset, y_offset, scale, &font, text);
+    // Vertical centering: draw_text_mut y is the top of the text line.
+    // For digits (no descenders), visual height is just the ascent.
+    let ascent = scaled_font.ascent();
+
+    let x_offset = ((size as f32 - text_width) / 2.0).round() as i32;
+    let y_offset = ((size as f32 - ascent) / 2.0).round() as i32;
+
+    imageproc::drawing::draw_text_mut(&mut img, fg, x_offset, y_offset, px_scale, &font, text);
 
     let rgba = img.into_raw();
     Icon::from_rgba(rgba, size, size).expect("Failed to create icon")
