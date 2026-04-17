@@ -92,3 +92,37 @@ jobs:
         with:
           files: gh-tray-*/*
           body: ${{ steps.changelog.outputs.content }}
+
+  update-packaging:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+
+      - name: Read SHA256s
+        id: sha
+        run: |
+          echo "win=$(cat gh-tray-x86_64-pc-windows-msvc/gh-tray-x86_64-pc-windows-msvc.zip.sha256)" >> "$GITHUB_OUTPUT"
+          echo "arm=$(cat gh-tray-aarch64-apple-darwin/gh-tray-aarch64-apple-darwin.tar.gz.sha256)" >> "$GITHUB_OUTPUT"
+          echo "intel=$(cat gh-tray-x86_64-apple-darwin/gh-tray-x86_64-apple-darwin.tar.gz.sha256)" >> "$GITHUB_OUTPUT"
+
+      - name: Update Scoop manifest and Homebrew formula
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          ./scripts/update-packaging.sh "${VERSION#v}" "${{ steps.sha.outputs.win }}" "${{ steps.sha.outputs.arm }}" "${{ steps.sha.outputs.intel }}"
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add bucket/gh-tray.json Formula/gh-tray.rb
+          git diff --cached --quiet || git commit -m "chore: update scoop manifest and homebrew formula for ${{ github.ref_name }}"
+          git push origin HEAD:main
