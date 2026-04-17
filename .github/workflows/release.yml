@@ -14,13 +14,16 @@ jobs:
         include:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact: gh-tray.exe
+            binary: gh-tray.exe
+            archive: gh-tray-x86_64-pc-windows-msvc.zip
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact: gh-tray
+            binary: gh-tray
+            archive: gh-tray-aarch64-apple-darwin.tar.gz
           - os: macos-latest
             target: x86_64-apple-darwin
-            artifact: gh-tray
+            binary: gh-tray
+            archive: gh-tray-x86_64-apple-darwin.tar.gz
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -28,10 +31,27 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          tar -czf "${{ matrix.archive }}" -C "target/${{ matrix.target }}/release" "${{ matrix.binary }}"
+          shasum -a 256 "${{ matrix.archive }}" | awk '{print $1}' | tr -d '\n' > "${{ matrix.archive }}.sha256"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "target/${{ matrix.target }}/release/${{ matrix.binary }}" -DestinationPath "${{ matrix.archive }}"
+          $hash = (Get-FileHash -Algorithm SHA256 "${{ matrix.archive }}").Hash.ToLower()
+          Set-Content -Path "${{ matrix.archive }}.sha256" -Value $hash -NoNewline
+
       - uses: actions/upload-artifact@v4
         with:
           name: gh-tray-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/${{ matrix.artifact }}
+          path: |
+            ${{ matrix.archive }}
+            ${{ matrix.archive }}.sha256
 
   release:
     needs: build
