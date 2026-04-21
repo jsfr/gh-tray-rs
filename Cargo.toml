@@ -2,6 +2,7 @@
 name = "gh-tray"
 version = "0.0.3"
 edition = "2024"
+description = "Cross-platform system tray app monitoring GitHub PRs"
 
 [dependencies]
 tray-icon = "0.22"
@@ -29,3 +30,15 @@ winreg = "0.56"
 strip = true
 lto = true
 codegen-units = 1
+
+[package.metadata.bundle]
+name = "gh-tray"
+identifier = "io.github.jsfr.gh-tray"
+icon = ["assets/icon-1024.png"]
+category = "public.app-category.developer-tools"
+short_description = "Cross-platform system tray app monitoring GitHub PRs"
+osx_minimum_system_version = "11.0"
+osx_info_plist_exts = ["assets/macos/Info.plist.frag"]
+
+[target.'cfg(windows)'.build-dependencies]
+winres = "0.1"
