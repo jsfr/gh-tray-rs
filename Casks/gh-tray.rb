@@ -13,12 +13,18 @@ cask "gh-tray" do
   app "gh-tray.app"
   binary "#{appdir}/gh-tray.app/Contents/MacOS/gh-tray"
 
-  caveats <<~EOS
-    On first launch, macOS may refuse to open gh-tray because the app is not signed.
-    To bypass Gatekeeper, either:
+  postflight do
+    system_command "/usr/bin/xattr",
+                   args: ["-cr", "#{appdir}/gh-tray.app"],
+                   sudo: false
+  end
 
-      * Right-click gh-tray.app in Finder → Open → Open
-      * Or run: xattr -d com.apple.quarantine "#{appdir}/gh-tray.app"
+  caveats <<~EOS
+    gh-tray is not code-signed. This cask strips the quarantine attribute
+    on install so macOS allows the app to launch.
+
+    If the app still won't open (for example after moving it), re-run:
+      xattr -cr "#{appdir}/gh-tray.app"
   EOS
 
   zap trash: [
