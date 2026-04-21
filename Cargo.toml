@@ -34,7 +34,7 @@ codegen-units = 1
 [package.metadata.bundle]
 name = "gh-tray"
 identifier = "io.github.jsfr.gh-tray"
-icon = ["assets/icon-1024.png"]
+icon = ["assets/AppIcon.icns", "assets/icon.ico"]
 category = "public.app-category.developer-tools"
 short_description = "Cross-platform system tray app monitoring GitHub PRs"
 osx_minimum_system_version = "11.0"
