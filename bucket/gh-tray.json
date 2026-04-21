@@ -6,12 +6,15 @@
   "architecture": {
     "64bit": {
       "url": "https://github.com/jsfr/gh-tray-rs/releases/download/v0.0.4/gh-tray-x86_64-pc-windows-msvc.zip",
-      "hash": "d9b3fc0242bc035175bbd08064c4e49acad322c30dc86a6d5feaf56e825efb30",
+      "hash": "408c6e7e0aa410da13cd2be2efc658d516674db7b238e2eada8f5df24dd8b413",
       "bin": "gh-tray.exe"
     }
   },
   "shortcuts": [
-    ["gh-tray.exe", "gh-tray"]
+    [
+      "gh-tray.exe",
+      "gh-tray"
+    ]
   ],
   "checkver": {
     "github": "https://github.com/jsfr/gh-tray-rs"
