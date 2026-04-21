@@ -10,6 +10,9 @@
       "bin": "gh-tray.exe"
     }
   },
+  "shortcuts": [
+    ["gh-tray.exe", "gh-tray"]
+  ],
   "checkver": {
     "github": "https://github.com/jsfr/gh-tray-rs"
   },
