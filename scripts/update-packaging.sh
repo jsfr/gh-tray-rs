@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Update the Scoop manifest and Homebrew formula for a new release.
+# Update the Scoop manifest and Homebrew cask for a new release.
 #
 # Usage: update-packaging.sh <version> <sha_win> <sha_mac_arm> <sha_mac_intel>
 #   <version>  bare version, no v prefix (e.g. 0.0.3)
 #   <sha_*>    sha256 hex digests of the corresponding release archives
 #
-# Rewrites bucket/gh-tray.json and Formula/gh-tray.rb in place.
+# Rewrites bucket/gh-tray.json and Casks/gh-tray.rb in place.
 
 set -euo pipefail
 
@@ -31,5 +31,5 @@ jq \
   bucket/gh-tray.json > "$tmp"
 mv "$tmp" bucket/gh-tray.json
 
-python3 scripts/update_formula.py \
-  "$VERSION" "$SHA_MAC_ARM" "$SHA_MAC_INTEL" "$BASE_URL" Formula/gh-tray.rb
+python3 scripts/update_cask.py \
+  "$VERSION" "$SHA_MAC_ARM" "$SHA_MAC_INTEL" Casks/gh-tray.rb

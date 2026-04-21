@@ -5,10 +5,10 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-mkdir -p "$TMP/bucket" "$TMP/Formula" "$TMP/scripts"
+mkdir -p "$TMP/bucket" "$TMP/Casks" "$TMP/scripts"
 cp "$ROOT/bucket/gh-tray.json" "$TMP/bucket/gh-tray.json"
-cp "$ROOT/Formula/gh-tray.rb"  "$TMP/Formula/gh-tray.rb"
-cp "$ROOT/scripts/update_formula.py" "$TMP/scripts/update_formula.py"
+cp "$ROOT/Casks/gh-tray.rb"  "$TMP/Casks/gh-tray.rb"
+cp "$ROOT/scripts/update_cask.py" "$TMP/scripts/update_cask.py"
 cp "$ROOT/scripts/update-packaging.sh" "$TMP/scripts/update-packaging.sh"
 
 (
@@ -25,10 +25,9 @@ jq -e '.version == "1.2.3"' "$TMP/bucket/gh-tray.json" >/dev/null
 jq -e '.architecture."64bit".hash == "cccc333333333333333333333333333333333333333333333333333333333333"' "$TMP/bucket/gh-tray.json" >/dev/null
 jq -e '.architecture."64bit".url | endswith("/v1.2.3/gh-tray-x86_64-pc-windows-msvc.zip")' "$TMP/bucket/gh-tray.json" >/dev/null
 
-# Formula assertions
-grep -q 'version "1.2.3"' "$TMP/Formula/gh-tray.rb"
-grep -q 'v1.2.3/gh-tray-aarch64-apple-darwin.tar.gz' "$TMP/Formula/gh-tray.rb"
-grep -q 'v1.2.3/gh-tray-x86_64-apple-darwin.tar.gz' "$TMP/Formula/gh-tray.rb"
-grep -q 'sha256 "aaaa111111111111111111111111111111111111111111111111111111111111"' "$TMP/Formula/gh-tray.rb"
-grep -q 'sha256 "bbbb222222222222222222222222222222222222222222222222222222222222"' "$TMP/Formula/gh-tray.rb"
+# Cask assertions
+grep -q 'version "1.2.3"' "$TMP/Casks/gh-tray.rb"
+grep -q 'sha256 arm:   "aaaa111111111111111111111111111111111111111111111111111111111111",' "$TMP/Casks/gh-tray.rb"
+grep -q '         intel: "bbbb222222222222222222222222222222222222222222222222222222222222"' "$TMP/Casks/gh-tray.rb"
+grep -q '/v#{version}/gh-tray-#{arch}-apple-darwin.tar.gz' "$TMP/Casks/gh-tray.rb"
 echo "OK"
