@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.4] - 2026-04-21
+
+### Added
+
+- add app icon assets and macOS Info.plist fragment
+- configure cargo-bundle and add winres build-dep
+- embed icon in Windows exe via winres
+- replace homebrew formula with cask for .app distribution
+- add cask updater script, remove formula updater
+- add start menu shortcut to scoop manifest
+
+### CI
+
+- bundle macOS .app via cargo-bundle in release workflow
+- commit cask path in update-packaging job
+
+### Changed
+
+- point packaging updater at cask
+
+### Fixed
+
+- regenerate icon as 8-bit and pre-build .icns for cargo-bundle
+
 ## [0.0.3] - 2026-04-20
 
 ### Added
