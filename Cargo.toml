@@ -27,9 +27,8 @@ tracing-appender = "0.2"
 winreg = "0.56"
 
 [profile.release]
-strip = true
-lto = true
-codegen-units = 1
+strip = "debuginfo"
+lto = "thin"
 
 [package.metadata.bundle]
 name = "gh-tray"
