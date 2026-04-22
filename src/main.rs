@@ -192,7 +192,34 @@ fn local_time_now() -> String {
     }
 }
 
+/// macOS Tahoe (26.x) crashes (`SIGBUS` / `EXC_ARM_DA_ALIGN`) inside the ImageIO
+/// PNG plugin when a tray-icon NSImage is decoded in a process whose parent is
+/// an adhoc-signed binary (e.g. Homebrew `fish`). Re-execing through the
+/// Apple platform-signed `/usr/bin/env` resets the inherited security context
+/// and avoids the crash. Honors `GH_TRAY_NO_REEXEC` for opting out.
+#[cfg(target_os = "macos")]
+fn reexec_via_platform_binary() {
+    use std::os::unix::process::CommandExt;
+
+    const SENTINEL: &str = "GH_TRAY_REEXECED";
+    if std::env::var_os(SENTINEL).is_some() || std::env::var_os("GH_TRAY_NO_REEXEC").is_some() {
+        return;
+    }
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    let _ = std::process::Command::new("/usr/bin/env")
+        .arg(exe)
+        .args(args)
+        .env(SENTINEL, "1")
+        .exec();
+}
+
 fn main() {
+    #[cfg(target_os = "macos")]
+    reexec_via_platform_binary();
+
     let cli = Cli::parse();
     let mut config = config::load();
     config::apply_env_overrides(&mut config);
