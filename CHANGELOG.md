@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.5] - 2026-04-27
+
+### Fixed
+
+- strip quarantine attribute on cask install for macOS Tahoe
+- re-exec via /usr/bin/env to avoid Tahoe ImageIO SIGBUS from adhoc-signed parents
+
 ## [0.0.4] - 2026-04-21
 
 ### Added
