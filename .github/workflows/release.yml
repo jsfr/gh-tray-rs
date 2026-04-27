@@ -41,6 +41,16 @@ jobs:
         if: runner.os == 'macOS'
         run: cargo bundle --release --target ${{ matrix.target }}
 
+      - name: Sign with hardened runtime (macOS)
+        # Required for macOS Tahoe (26.x): without --options runtime the
+        # status item silently fails to render in the menu bar when launched
+        # from /Applications, and ImageIO PNG decoding crashes with SIGBUS
+        # when launched from adhoc-signed parents (e.g. Homebrew fish).
+        if: runner.os == 'macOS'
+        run: |
+          codesign --force --options runtime --sign - \
+            "target/${{ matrix.target }}/release/bundle/osx/gh-tray.app"
+
       - name: Package (macOS)
         if: runner.os == 'macOS'
         run: |
