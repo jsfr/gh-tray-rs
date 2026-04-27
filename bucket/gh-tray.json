@@ -1,12 +1,12 @@
 {
-  "version": "0.0.6",
+  "version": "0.0.7",
   "description": "Cross-platform system tray app monitoring GitHub PRs",
   "homepage": "https://github.com/jsfr/gh-tray-rs",
   "license": "MIT",
   "architecture": {
     "64bit": {
-      "url": "https://github.com/jsfr/gh-tray-rs/releases/download/v0.0.6/gh-tray-x86_64-pc-windows-msvc.zip",
-      "hash": "5dc501e9550628a2f4529a95e1a1adcd9cb2c4bd5a4d1b625d632cfc4703e276",
+      "url": "https://github.com/jsfr/gh-tray-rs/releases/download/v0.0.7/gh-tray-x86_64-pc-windows-msvc.zip",
+      "hash": "39ebf32659a855d730555c68f92dcaa0db706260f7512f0d4793b6e62e961f7b",
       "bin": "gh-tray.exe"
     }
   },
