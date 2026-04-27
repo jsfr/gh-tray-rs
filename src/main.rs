@@ -196,7 +196,12 @@ fn local_time_now() -> String {
 /// PNG plugin when a tray-icon NSImage is decoded in a process whose parent is
 /// an adhoc-signed binary (e.g. Homebrew `fish`). Re-execing through the
 /// Apple platform-signed `/usr/bin/env` resets the inherited security context
-/// and avoids the crash. Honors `GH_TRAY_NO_REEXEC` for opting out.
+/// and avoids the crash.
+///
+/// Skip when launched from inside an `.app` bundle: launchd is already a
+/// platform binary, and re-execing detaches the process from its bundle
+/// context (NSApplication then fails to register the status item).
+/// Honors `GH_TRAY_NO_REEXEC` for opting out.
 #[cfg(target_os = "macos")]
 fn reexec_via_platform_binary() {
     use std::os::unix::process::CommandExt;
@@ -208,6 +213,9 @@ fn reexec_via_platform_binary() {
     let Ok(exe) = std::env::current_exe() else {
         return;
     };
+    if exe.to_string_lossy().contains(".app/Contents/MacOS/") {
+        return;
+    }
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
     let _ = std::process::Command::new("/usr/bin/env")
         .arg(exe)
