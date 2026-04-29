@@ -49,24 +49,50 @@ pub fn demo_pull_requests() -> PullRequestGroup {
                 false,
             ),
         ],
-        review_requested: vec![
+        assigned: vec![
             make_pr(
-                10,
-                "demo/lib",
-                "Improve error handling",
+                15,
+                "demo/app",
+                "Triage flaky integration tests",
                 false,
+                Some(CheckStatus::Failure),
                 None,
-                Some(ReviewStatus::ChangesRequested),
                 false,
             ),
             make_pr(
-                11,
-                "demo/lib",
-                "Add retry logic",
+                16,
+                "demo/api",
+                "Investigate latency regression",
                 false,
-                Some(CheckStatus::Success),
+                None,
                 None,
                 false,
+            ),
+        ],
+        needs_review: vec![
+            with_review(
+                make_pr(
+                    10,
+                    "demo/lib",
+                    "Improve error handling",
+                    false,
+                    None,
+                    Some(ReviewStatus::ChangesRequested),
+                    false,
+                ),
+                Some(ViewerReviewState::ChangesRequested),
+            ),
+            with_review(
+                make_pr(
+                    11,
+                    "demo/lib",
+                    "Add retry logic",
+                    false,
+                    Some(CheckStatus::Success),
+                    None,
+                    false,
+                ),
+                Some(ViewerReviewState::Commented),
             ),
             make_pr(
                 12,
@@ -74,26 +100,6 @@ pub fn demo_pull_requests() -> PullRequestGroup {
                 "Update API documentation",
                 false,
                 None,
-                None,
-                false,
-            ),
-        ],
-        involved: vec![
-            make_pr(
-                20,
-                "demo/infra",
-                "Migrate to new CI pipeline",
-                false,
-                Some(CheckStatus::Failure),
-                Some(ReviewStatus::ChangesRequested),
-                false,
-            ),
-            make_pr(
-                21,
-                "demo/infra",
-                "Add monitoring dashboard",
-                true,
-                Some(CheckStatus::Pending),
                 None,
                 false,
             ),
@@ -118,6 +124,14 @@ fn make_pr(
         is_draft,
         check_status,
         review_status,
+        viewer_review_state: None,
         has_conflicts,
+    }
+}
+
+fn with_review(pr: PullRequest, state: Option<ViewerReviewState>) -> PullRequest {
+    PullRequest {
+        viewer_review_state: state,
+        ..pr
     }
 }

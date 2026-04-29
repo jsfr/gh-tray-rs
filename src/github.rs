@@ -54,9 +54,13 @@ query($searchQuery: String!) {
             }
           }
         }
+        assignees(first: 10) {
+          nodes { login }
+        }
         reviews(last: 1, states: [APPROVED, CHANGES_REQUESTED]) {
           nodes { state }
         }
+        viewerLatestReview { state }
         commits(last: 1) {
           nodes {
             commit {
@@ -95,8 +99,8 @@ fn parse_response(json: &str, username: &str) -> Result<PullRequestGroup, String
     let nodes = nodes.as_array().ok_or("Expected nodes array in response")?;
 
     let mut mine = Vec::new();
-    let mut review_requested = Vec::new();
-    let mut involved = Vec::new();
+    let mut assigned = Vec::new();
+    let mut needs_review = Vec::new();
 
     for node in nodes {
         let Some(pr) = parse_pull_request(node) else {
@@ -105,20 +109,28 @@ fn parse_response(json: &str, username: &str) -> Result<PullRequestGroup, String
 
         let author = node["author"]["login"].as_str().unwrap_or("");
         let reviewers = parse_reviewer_logins(node);
+        let assignees = parse_assignee_logins(node);
 
         if author.eq_ignore_ascii_case(username) {
             mine.push(pr);
-        } else if reviewers.iter().any(|r| r.eq_ignore_ascii_case(username)) {
-            review_requested.push(pr);
+        } else if assignees.iter().any(|a| a.eq_ignore_ascii_case(username)) {
+            assigned.push(pr);
         } else {
-            involved.push(pr);
+            let is_requested = reviewers.iter().any(|r| r.eq_ignore_ascii_case(username));
+            let has_open_review = matches!(
+                pr.viewer_review_state,
+                Some(ViewerReviewState::Commented | ViewerReviewState::ChangesRequested)
+            );
+            if is_requested || has_open_review {
+                needs_review.push(pr);
+            }
         }
     }
 
     Ok(PullRequestGroup {
         mine,
-        review_requested,
-        involved,
+        assigned,
+        needs_review,
     })
 }
 
@@ -136,8 +148,19 @@ fn parse_pull_request(node: &serde_json::Value) -> Option<PullRequest> {
         is_draft: node["isDraft"].as_bool().unwrap_or(false),
         check_status: parse_check_status(node),
         review_status: parse_review_status(node),
+        viewer_review_state: parse_viewer_review_state(node),
         has_conflicts: node["mergeable"].as_str() == Some("CONFLICTING"),
     })
+}
+
+fn parse_viewer_review_state(node: &serde_json::Value) -> Option<ViewerReviewState> {
+    let state = node["viewerLatestReview"]["state"].as_str()?;
+    match state {
+        "APPROVED" => Some(ViewerReviewState::Approved),
+        "CHANGES_REQUESTED" => Some(ViewerReviewState::ChangesRequested),
+        "COMMENTED" => Some(ViewerReviewState::Commented),
+        _ => None,
+    }
 }
 
 fn parse_check_status(node: &serde_json::Value) -> Option<CheckStatus> {
@@ -174,6 +197,18 @@ fn parse_reviewer_logins(node: &serde_json::Value) -> Vec<String> {
         .collect()
 }
 
+fn parse_assignee_logins(node: &serde_json::Value) -> Vec<String> {
+    let Some(nodes) = node["assignees"]["nodes"].as_array() else {
+        return Vec::new();
+    };
+
+    nodes
+        .iter()
+        .filter_map(|n| n["login"].as_str())
+        .map(String::from)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -191,7 +226,9 @@ mod tests {
                             "repository": { "nameWithOwner": "org/repo" },
                             "author": { "login": "testuser" },
                             "reviewRequests": { "nodes": [] },
+                            "assignees": { "nodes": [] },
                             "reviews": { "nodes": [{ "state": "APPROVED" }] },
+                            "viewerLatestReview": null,
                             "commits": { "nodes": [{ "commit": { "statusCheckRollup": { "state": "SUCCESS" } } }] },
                             "mergeable": "MERGEABLE"
                         },
@@ -203,20 +240,66 @@ mod tests {
                             "repository": { "nameWithOwner": "org/repo" },
                             "author": { "login": "other" },
                             "reviewRequests": { "nodes": [{ "requestedReviewer": { "login": "testuser" } }] },
+                            "assignees": { "nodes": [] },
                             "reviews": { "nodes": [] },
+                            "viewerLatestReview": null,
                             "commits": { "nodes": [{ "commit": { "statusCheckRollup": { "state": "PENDING" } } }] },
                             "mergeable": "CONFLICTING"
                         },
                         {
-                            "title": "Involved PR",
+                            "title": "Assigned PR",
+                            "url": "https://github.com/org/repo/pull/4",
+                            "number": 4,
+                            "isDraft": false,
+                            "repository": { "nameWithOwner": "org/repo" },
+                            "author": { "login": "someone" },
+                            "reviewRequests": { "nodes": [] },
+                            "assignees": { "nodes": [{ "login": "testuser" }] },
+                            "reviews": { "nodes": [] },
+                            "viewerLatestReview": null,
+                            "commits": { "nodes": [{ "commit": { "statusCheckRollup": { "state": "SUCCESS" } } }] },
+                            "mergeable": "MERGEABLE"
+                        },
+                        {
+                            "title": "Commented PR",
                             "url": "https://github.com/org/repo/pull/3",
                             "number": 3,
                             "isDraft": false,
                             "repository": { "nameWithOwner": "org/repo" },
                             "author": { "login": "someone" },
                             "reviewRequests": { "nodes": [] },
+                            "assignees": { "nodes": [] },
                             "reviews": { "nodes": [{ "state": "CHANGES_REQUESTED" }] },
+                            "viewerLatestReview": { "state": "COMMENTED" },
                             "commits": { "nodes": [{ "commit": { "statusCheckRollup": { "state": "FAILURE" } } }] },
+                            "mergeable": "MERGEABLE"
+                        },
+                        {
+                            "title": "Bystander PR",
+                            "url": "https://github.com/org/repo/pull/5",
+                            "number": 5,
+                            "isDraft": false,
+                            "repository": { "nameWithOwner": "org/repo" },
+                            "author": { "login": "someone" },
+                            "reviewRequests": { "nodes": [] },
+                            "assignees": { "nodes": [] },
+                            "reviews": { "nodes": [] },
+                            "viewerLatestReview": null,
+                            "commits": { "nodes": [{ "commit": { "statusCheckRollup": { "state": "SUCCESS" } } }] },
+                            "mergeable": "MERGEABLE"
+                        },
+                        {
+                            "title": "Already approved by me",
+                            "url": "https://github.com/org/repo/pull/6",
+                            "number": 6,
+                            "isDraft": false,
+                            "repository": { "nameWithOwner": "org/repo" },
+                            "author": { "login": "someone" },
+                            "reviewRequests": { "nodes": [] },
+                            "assignees": { "nodes": [] },
+                            "reviews": { "nodes": [{ "state": "APPROVED" }] },
+                            "viewerLatestReview": { "state": "APPROVED" },
+                            "commits": { "nodes": [{ "commit": { "statusCheckRollup": { "state": "SUCCESS" } } }] },
                             "mergeable": "MERGEABLE"
                         }
                     ]
@@ -231,10 +314,67 @@ mod tests {
         let group = parse_response(&sample_response(), "testuser").unwrap();
         assert_eq!(group.mine.len(), 1);
         assert_eq!(group.mine[0].title, "Add feature");
-        assert_eq!(group.review_requested.len(), 1);
-        assert_eq!(group.review_requested[0].title, "Review this");
-        assert_eq!(group.involved.len(), 1);
-        assert_eq!(group.involved[0].title, "Involved PR");
+        assert_eq!(group.assigned.len(), 1);
+        assert_eq!(group.assigned[0].title, "Assigned PR");
+        assert_eq!(group.needs_review.len(), 2);
+        assert_eq!(group.needs_review[0].title, "Review this");
+        assert_eq!(group.needs_review[1].title, "Commented PR");
+    }
+
+    #[test]
+    fn drops_bystander_and_already_approved_prs() {
+        let group = parse_response(&sample_response(), "testuser").unwrap();
+        let titles: Vec<&str> = group
+            .mine
+            .iter()
+            .chain(&group.assigned)
+            .chain(&group.needs_review)
+            .map(|pr| pr.title.as_str())
+            .collect();
+        assert!(!titles.contains(&"Bystander PR"));
+        assert!(!titles.contains(&"Already approved by me"));
+    }
+
+    #[test]
+    fn assigned_takes_precedence_over_needs_review_but_not_mine() {
+        let json = r#"{
+            "data": { "search": { "nodes": [
+                {
+                    "title": "Reviewer + assignee",
+                    "url": "https://example.com/1",
+                    "number": 1,
+                    "isDraft": false,
+                    "repository": { "nameWithOwner": "org/repo" },
+                    "author": { "login": "other" },
+                    "reviewRequests": { "nodes": [{ "requestedReviewer": { "login": "testuser" } }] },
+                    "assignees": { "nodes": [{ "login": "testuser" }] },
+                    "reviews": { "nodes": [] },
+                    "viewerLatestReview": null,
+                    "commits": { "nodes": [] },
+                    "mergeable": "MERGEABLE"
+                },
+                {
+                    "title": "Author of own PR",
+                    "url": "https://example.com/2",
+                    "number": 2,
+                    "isDraft": false,
+                    "repository": { "nameWithOwner": "org/repo" },
+                    "author": { "login": "testuser" },
+                    "reviewRequests": { "nodes": [] },
+                    "assignees": { "nodes": [{ "login": "testuser" }] },
+                    "reviews": { "nodes": [] },
+                    "viewerLatestReview": null,
+                    "commits": { "nodes": [] },
+                    "mergeable": "MERGEABLE"
+                }
+            ] } }
+        }"#;
+        let group = parse_response(json, "testuser").unwrap();
+        assert_eq!(group.mine.len(), 1);
+        assert_eq!(group.mine[0].title, "Author of own PR");
+        assert_eq!(group.assigned.len(), 1);
+        assert_eq!(group.assigned[0].title, "Reviewer + assignee");
+        assert_eq!(group.needs_review.len(), 0);
     }
 
     #[test]
@@ -242,19 +382,22 @@ mod tests {
         let group = parse_response(&sample_response(), "testuser").unwrap();
         assert_eq!(group.mine[0].check_status, Some(CheckStatus::Success));
         assert_eq!(
-            group.review_requested[0].check_status,
+            group.needs_review[0].check_status,
             Some(CheckStatus::Pending)
         );
-        assert_eq!(group.involved[0].check_status, Some(CheckStatus::Failure));
+        assert_eq!(
+            group.needs_review[1].check_status,
+            Some(CheckStatus::Failure)
+        );
     }
 
     #[test]
     fn parses_review_status() {
         let group = parse_response(&sample_response(), "testuser").unwrap();
         assert_eq!(group.mine[0].review_status, Some(ReviewStatus::Approved));
-        assert_eq!(group.review_requested[0].review_status, None);
+        assert_eq!(group.needs_review[0].review_status, None);
         assert_eq!(
-            group.involved[0].review_status,
+            group.needs_review[1].review_status,
             Some(ReviewStatus::ChangesRequested)
         );
     }
@@ -263,9 +406,9 @@ mod tests {
     fn parses_draft_and_conflicts() {
         let group = parse_response(&sample_response(), "testuser").unwrap();
         assert!(!group.mine[0].is_draft);
-        assert!(group.review_requested[0].is_draft);
+        assert!(group.needs_review[0].is_draft);
         assert!(!group.mine[0].has_conflicts);
-        assert!(group.review_requested[0].has_conflicts);
+        assert!(group.needs_review[0].has_conflicts);
     }
 
     #[test]
@@ -279,7 +422,9 @@ mod tests {
                 "repository": { "nameWithOwner": "org/repo" },
                 "author": { "login": "user" },
                 "reviewRequests": { "nodes": [] },
+                "assignees": { "nodes": [] },
                 "reviews": { "nodes": [] },
+                "viewerLatestReview": null,
                 "commits": { "nodes": [{ "commit": { "statusCheckRollup": null } }] },
                 "mergeable": "UNKNOWN"
             }] } }

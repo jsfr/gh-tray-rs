@@ -13,6 +13,13 @@ pub enum ReviewStatus {
     ReviewRequired,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum ViewerReviewState {
+    Approved,
+    ChangesRequested,
+    Commented,
+}
+
 #[derive(Debug, Clone)]
 pub struct PullRequest {
     pub title: String,
@@ -22,19 +29,20 @@ pub struct PullRequest {
     pub is_draft: bool,
     pub check_status: Option<CheckStatus>,
     pub review_status: Option<ReviewStatus>,
+    pub viewer_review_state: Option<ViewerReviewState>,
     pub has_conflicts: bool,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct PullRequestGroup {
     pub mine: Vec<PullRequest>,
-    pub review_requested: Vec<PullRequest>,
-    pub involved: Vec<PullRequest>,
+    pub assigned: Vec<PullRequest>,
+    pub needs_review: Vec<PullRequest>,
 }
 
 impl PullRequestGroup {
     pub fn total_count(&self) -> usize {
-        self.mine.len() + self.review_requested.len() + self.involved.len()
+        self.mine.len() + self.assigned.len() + self.needs_review.len()
     }
 }
 
@@ -46,10 +54,10 @@ mod tests {
     fn total_count_sums_all_groups() {
         let group = PullRequestGroup {
             mine: vec![make_pr(1), make_pr(2)],
-            review_requested: vec![make_pr(3)],
-            involved: vec![make_pr(4), make_pr(5), make_pr(6)],
+            assigned: vec![make_pr(7)],
+            needs_review: vec![make_pr(3), make_pr(4)],
         };
-        assert_eq!(group.total_count(), 6);
+        assert_eq!(group.total_count(), 5);
     }
 
     #[test]
@@ -67,6 +75,7 @@ mod tests {
             is_draft: false,
             check_status: None,
             review_status: None,
+            viewer_review_state: None,
             has_conflicts: false,
         }
     }

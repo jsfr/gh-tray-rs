@@ -31,6 +31,16 @@ pub fn status_prefix(pr: &PullRequest) -> &'static str {
     }
 }
 
+/// Emoji prefix for the Review group: only viewer's review state matters.
+pub fn review_prefix(pr: &PullRequest) -> &'static str {
+    match &pr.viewer_review_state {
+        Some(ViewerReviewState::Approved) => "\u{1F44D} ", // 👍 Approved
+        Some(ViewerReviewState::ChangesRequested) => "\u{1F44E} ", // 👎 Changes requested
+        Some(ViewerReviewState::Commented) => "\u{1F4AC} ", // 💬 Commented
+        None => "\u{1F440} ",                              // 👀 Review requested
+    }
+}
+
 /// Extract repo name from "owner/repo" format.
 fn repo_name(name_with_owner: &str) -> &str {
     name_with_owner
@@ -103,14 +113,21 @@ pub fn build_menu(
     let menu = Menu::new();
     let mut actions = HashMap::new();
 
-    add_section(&menu, &mut actions, "My PRs", &group.mine);
+    add_section(&menu, &mut actions, "My PRs", &group.mine, status_prefix);
     add_section(
         &menu,
         &mut actions,
-        "Review Requested",
-        &group.review_requested,
+        "Assigned",
+        &group.assigned,
+        status_prefix,
     );
-    add_section(&menu, &mut actions, "Involved", &group.involved);
+    add_section(
+        &menu,
+        &mut actions,
+        "Review",
+        &group.needs_review,
+        review_prefix,
+    );
 
     let _ = menu.append(&PredefinedMenuItem::separator());
 
@@ -152,6 +169,7 @@ fn add_section(
     actions: &mut HashMap<MenuId, MenuAction>,
     header: &str,
     prs: &[PullRequest],
+    prefix_fn: fn(&PullRequest) -> &'static str,
 ) {
     if prs.is_empty() {
         return;
@@ -163,7 +181,7 @@ fn add_section(
     let _ = menu.append(&PredefinedMenuItem::separator());
 
     for pr in prs {
-        let prefix = status_prefix(pr);
+        let prefix = prefix_fn(pr);
         let repo = repo_name(&pr.repository);
         let label = format!("{prefix}{repo}#{} {}", pr.number, pr.title);
         let item = MenuItem::new(&label, true, None);
@@ -187,6 +205,7 @@ mod tests {
             is_draft: true,
             check_status: Some(CheckStatus::Failure),
             review_status: Some(ReviewStatus::ChangesRequested),
+            viewer_review_state: None,
             has_conflicts: true,
         };
         assert_eq!(status_prefix(&pr), "\u{1F6A7} ");
@@ -228,6 +247,7 @@ mod tests {
             is_draft: false,
             check_status: None,
             review_status: None,
+            viewer_review_state: None,
             has_conflicts: false,
         };
 
@@ -257,12 +277,12 @@ mod tests {
     fn build_menu_includes_all_sections() {
         let group = PullRequestGroup {
             mine: vec![make_test_pr(1)],
-            review_requested: vec![make_test_pr(2)],
-            involved: vec![make_test_pr(3)],
+            assigned: vec![make_test_pr(4)],
+            needs_review: vec![make_test_pr(2), make_test_pr(3)],
         };
         let (_, actions) = build_menu(&group, false, Some("12:00:00"), false);
-        // 3 PR items + auto-start + quit = 5 actions
-        assert_eq!(actions.len(), 5);
+        // 4 PR items + auto-start + quit = 6 actions
+        assert_eq!(actions.len(), 6);
     }
 
     #[test]
@@ -270,8 +290,8 @@ mod tests {
     fn build_menu_skips_empty_sections() {
         let group = PullRequestGroup {
             mine: vec![make_test_pr(1)],
-            review_requested: vec![],
-            involved: vec![],
+            assigned: vec![],
+            needs_review: vec![],
         };
         let (_, actions) = build_menu(&group, false, Some("12:00:00"), false);
         // 1 PR item + auto-start + quit = 3 actions
@@ -287,7 +307,28 @@ mod tests {
             is_draft: false,
             check_status: None,
             review_status: None,
+            viewer_review_state: None,
             has_conflicts: false,
         }
+    }
+
+    #[test]
+    fn review_prefix_uses_viewer_review_state() {
+        let mut pr = make_test_pr(1);
+        pr.has_conflicts = true;
+        pr.check_status = Some(CheckStatus::Failure);
+        pr.review_status = Some(ReviewStatus::Approved);
+
+        pr.viewer_review_state = Some(ViewerReviewState::Approved);
+        assert_eq!(review_prefix(&pr), "\u{1F44D} ");
+
+        pr.viewer_review_state = Some(ViewerReviewState::ChangesRequested);
+        assert_eq!(review_prefix(&pr), "\u{1F44E} ");
+
+        pr.viewer_review_state = Some(ViewerReviewState::Commented);
+        assert_eq!(review_prefix(&pr), "\u{1F4AC} ");
+
+        pr.viewer_review_state = None;
+        assert_eq!(review_prefix(&pr), "\u{1F440} ");
     }
 }
