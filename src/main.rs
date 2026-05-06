@@ -192,6 +192,34 @@ fn local_time_now() -> String {
     }
 }
 
+/// GUI-launched macOS apps inherit launchd's PATH (`/usr/bin:/bin:/usr/sbin:/sbin`),
+/// which omits Homebrew. `gh` (installed via brew) and the `git` it invokes
+/// internally then can't be found, and the app exits before showing a tray icon.
+/// Prepend the standard Homebrew prefixes so child processes can resolve them.
+#[cfg(target_os = "macos")]
+fn ensure_homebrew_in_path() {
+    const HOMEBREW_BIN_DIRS: &[&str] = &["/opt/homebrew/bin", "/usr/local/bin"];
+
+    let extras: Vec<std::path::PathBuf> = HOMEBREW_BIN_DIRS
+        .iter()
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.exists())
+        .collect();
+
+    if extras.is_empty() {
+        return;
+    }
+
+    let current = std::env::var_os("PATH").unwrap_or_default();
+    let existing: Vec<std::path::PathBuf> = std::env::split_paths(&current).collect();
+    let combined = extras.into_iter().chain(existing);
+
+    if let Ok(joined) = std::env::join_paths(combined) {
+        // SAFETY: called from main before any threads are spawned.
+        unsafe { std::env::set_var("PATH", joined) };
+    }
+}
+
 /// macOS Tahoe (26.x) crashes (`SIGBUS` / `EXC_ARM_DA_ALIGN`) inside the ImageIO
 /// PNG plugin when a tray-icon NSImage is decoded in a process whose parent is
 /// an adhoc-signed binary (e.g. Homebrew `fish`). Re-execing through the
@@ -226,7 +254,10 @@ fn reexec_via_platform_binary() {
 
 fn main() {
     #[cfg(target_os = "macos")]
-    reexec_via_platform_binary();
+    {
+        reexec_via_platform_binary();
+        ensure_homebrew_in_path();
+    }
 
     let cli = Cli::parse();
     let mut config = config::load();
