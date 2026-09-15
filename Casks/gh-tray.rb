@@ -13,10 +13,9 @@ cask "gh-tray" do
   app "gh-tray.app"
   binary "#{appdir}/gh-tray.app/Contents/MacOS/gh-tray"
 
-  postflight do
-    system_command "/usr/bin/xattr",
-                   args: ["-cr", "#{appdir}/gh-tray.app"],
-                   sudo: false
+  postflight_steps do
+    run "/usr/bin/xattr",
+        args: ["-cr", "{{appdir}}/gh-tray.app"]
   end
 
   caveats <<~EOS
