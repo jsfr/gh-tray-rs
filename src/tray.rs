@@ -5,11 +5,21 @@ use std::collections::HashMap;
 use tray_icon::Icon;
 
 /// Actions that can be triggered from menu items.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum MenuAction {
     OpenUrl(String),
+    CopyUrl(String),
     ToggleAutoStart,
     Quit,
+}
+
+/// Shift-click on a PR row copies its link instead of opening it. Every other
+/// row keeps its action.
+pub fn apply_modifier(action: MenuAction, shift_held: bool) -> MenuAction {
+    match action {
+        MenuAction::OpenUrl(url) if shift_held => MenuAction::CopyUrl(url),
+        other => other,
+    }
 }
 
 /// Get the emoji prefix for a PR's status (priority order matches F# version).
@@ -130,6 +140,12 @@ pub fn build_menu(
     );
 
     let _ = menu.append(&PredefinedMenuItem::separator());
+
+    // Shift-click is invisible in the menu, so name it
+    if group.total_count() > 0 {
+        let hint_item = MenuItem::new("Hold \u{21E7} and click to copy a link", false, None);
+        let _ = menu.append(&hint_item);
+    }
 
     // Last updated timestamp
     let timestamp_text = match (is_stale, last_updated) {
@@ -310,6 +326,37 @@ mod tests {
             viewer_review_state: None,
             has_conflicts: false,
         }
+    }
+
+    #[test]
+    fn shift_click_on_a_pr_copies_the_url() {
+        let action = MenuAction::OpenUrl("https://example.com/1".to_string());
+        assert_eq!(
+            apply_modifier(action, true),
+            MenuAction::CopyUrl("https://example.com/1".to_string())
+        );
+    }
+
+    #[test]
+    fn plain_click_on_a_pr_opens_the_url() {
+        let action = MenuAction::OpenUrl("https://example.com/1".to_string());
+        assert_eq!(
+            apply_modifier(action, false),
+            MenuAction::OpenUrl("https://example.com/1".to_string())
+        );
+    }
+
+    #[test]
+    fn shift_click_on_quit_still_quits() {
+        assert_eq!(apply_modifier(MenuAction::Quit, true), MenuAction::Quit);
+    }
+
+    #[test]
+    fn shift_click_on_auto_start_still_toggles() {
+        assert_eq!(
+            apply_modifier(MenuAction::ToggleAutoStart, true),
+            MenuAction::ToggleAutoStart
+        );
     }
 
     #[test]

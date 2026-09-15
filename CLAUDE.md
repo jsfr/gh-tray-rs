@@ -36,6 +36,8 @@ do not add Windows or Linux paths back.
 - `src/demo.rs` — demo mode
 - `src/tray.rs` — tray icon + menu building
 - `src/theme.rs` — dark/light mode detection
+- `src/clipboard.rs` — clipboard writes
+- `src/modifiers.rs` — modifier key state
 - `src/logging.rs` — tracing setup
 
 ## Packaging

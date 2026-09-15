@@ -2,6 +2,11 @@
 
 macOS menu bar app monitoring GitHub pull requests.
 
+## Usage
+
+Click a pull request in the menu to open it in the browser. Hold ⇧ and
+click to copy its link to the clipboard instead.
+
 ## Installation
 
 ```sh

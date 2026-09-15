@@ -1,7 +1,9 @@
+mod clipboard;
 mod config;
 mod demo;
 mod github;
 mod logging;
+mod modifiers;
 mod theme;
 mod tray;
 mod types;
@@ -18,6 +20,9 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoopBuilder};
 use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
 use winit::window::WindowId;
+
+/// Menu clicks, each paired with the modifier state read as the click happened.
+static MENU_CLICKS: std::sync::Mutex<Vec<(muda::MenuId, bool)>> = std::sync::Mutex::new(Vec::new());
 
 #[derive(Parser)]
 #[command(name = "gh-tray", about = "GitHub PR monitor in your system tray")]
@@ -77,11 +82,18 @@ impl ApplicationHandler for App {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         // Process menu events
-        while let Ok(event) = MenuEvent::receiver().try_recv() {
-            if let Some(action) = self.menu_actions.get(&event.id).cloned() {
-                match action {
+        let clicks: Vec<(muda::MenuId, bool)> = MENU_CLICKS
+            .lock()
+            .map(|mut clicks| clicks.drain(..).collect())
+            .unwrap_or_default();
+        for (id, shift_held) in clicks {
+            if let Some(action) = self.menu_actions.get(&id).cloned() {
+                match tray::apply_modifier(action, shift_held) {
                     tray::MenuAction::OpenUrl(url) => {
                         let _ = open::that(&url);
+                    }
+                    tray::MenuAction::CopyUrl(url) => {
+                        clipboard::copy(&url);
                     }
                     tray::MenuAction::ToggleAutoStart => {
                         if let Some(al) = &self.auto_launch {
@@ -221,6 +233,18 @@ fn reexec_via_platform_binary() {
 fn main() {
     reexec_via_platform_binary();
     ensure_homebrew_in_path();
+
+    // muda runs this handler while the click is still being dispatched, so the
+    // modifier state it reads is the one the user held. It must be registered
+    // before any menu interaction: muda's handler slot is a OnceCell that the
+    // first menu event initialises to None, and a later registration is
+    // silently dropped.
+    MenuEvent::set_event_handler(Some(|event: MenuEvent| {
+        let shift_held = modifiers::shift_held();
+        if let Ok(mut clicks) = MENU_CLICKS.lock() {
+            clicks.push((event.id, shift_held));
+        }
+    }));
 
     let cli = Cli::parse();
     let mut config = config::load();
