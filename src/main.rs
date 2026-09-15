@@ -1,5 +1,3 @@
-#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
-
 mod config;
 mod demo;
 mod github;
@@ -18,6 +16,7 @@ use winit::application::ApplicationHandler;
 use winit::event::StartCause;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoopBuilder};
+use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
 use winit::window::WindowId;
 
 #[derive(Parser)]
@@ -151,44 +150,13 @@ impl App {
 }
 
 fn local_time_now() -> String {
-    #[cfg(unix)]
-    {
-        use std::mem::MaybeUninit;
-        unsafe {
-            let time = libc::time(std::ptr::null_mut());
-            let mut tm = MaybeUninit::uninit();
-            libc::localtime_r(&time, tm.as_mut_ptr());
-            let tm = tm.assume_init();
-            format!("{:02}:{:02}:{:02}", tm.tm_hour, tm.tm_min, tm.tm_sec)
-        }
-    }
-
-    #[cfg(windows)]
-    {
-        use std::mem::MaybeUninit;
-
-        #[repr(C)]
-        struct SystemTime {
-            w_year: u16,
-            w_month: u16,
-            w_day_of_week: u16,
-            w_day: u16,
-            w_hour: u16,
-            w_minute: u16,
-            w_second: u16,
-            w_milliseconds: u16,
-        }
-
-        unsafe extern "system" {
-            fn GetLocalTime(lp_system_time: *mut SystemTime);
-        }
-
-        unsafe {
-            let mut st = MaybeUninit::<SystemTime>::uninit();
-            GetLocalTime(st.as_mut_ptr());
-            let st = st.assume_init();
-            format!("{:02}:{:02}:{:02}", st.w_hour, st.w_minute, st.w_second)
-        }
+    use std::mem::MaybeUninit;
+    unsafe {
+        let time = libc::time(std::ptr::null_mut());
+        let mut tm = MaybeUninit::uninit();
+        libc::localtime_r(&time, tm.as_mut_ptr());
+        let tm = tm.assume_init();
+        format!("{:02}:{:02}:{:02}", tm.tm_hour, tm.tm_min, tm.tm_sec)
     }
 }
 
@@ -196,7 +164,6 @@ fn local_time_now() -> String {
 /// which omits Homebrew. `gh` (installed via brew) and the `git` it invokes
 /// internally then can't be found, and the app exits before showing a tray icon.
 /// Prepend the standard Homebrew prefixes so child processes can resolve them.
-#[cfg(target_os = "macos")]
 fn ensure_homebrew_in_path() {
     const HOMEBREW_BIN_DIRS: &[&str] = &["/opt/homebrew/bin", "/usr/local/bin"];
 
@@ -230,7 +197,6 @@ fn ensure_homebrew_in_path() {
 /// platform binary, and re-execing detaches the process from its bundle
 /// context (NSApplication then fails to register the status item).
 /// Honors `GH_TRAY_NO_REEXEC` for opting out.
-#[cfg(target_os = "macos")]
 fn reexec_via_platform_binary() {
     use std::os::unix::process::CommandExt;
 
@@ -253,11 +219,8 @@ fn reexec_via_platform_binary() {
 }
 
 fn main() {
-    #[cfg(target_os = "macos")]
-    {
-        reexec_via_platform_binary();
-        ensure_homebrew_in_path();
-    }
+    reexec_via_platform_binary();
+    ensure_homebrew_in_path();
 
     let cli = Cli::parse();
     let mut config = config::load();
@@ -290,13 +253,9 @@ fn main() {
         std::process::exit(1);
     }
 
-    // Build event loop — on macOS, set Accessory policy to hide from Dock
+    // Accessory activation policy keeps the app out of the Dock
     let mut builder = EventLoopBuilder::default();
-    #[cfg(target_os = "macos")]
-    {
-        use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
-        builder.with_activation_policy(ActivationPolicy::Accessory);
-    }
+    builder.with_activation_policy(ActivationPolicy::Accessory);
     let event_loop = builder.build().expect("Failed to create event loop");
 
     // Set up auto-launch

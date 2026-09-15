@@ -11,66 +11,41 @@ jobs:
   build:
     strategy:
       matrix:
-        include:
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            binary: gh-tray.exe
-            archive: gh-tray-x86_64-pc-windows-msvc.zip
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            archive: gh-tray-aarch64-apple-darwin.tar.gz
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            archive: gh-tray-x86_64-apple-darwin.tar.gz
-    runs-on: ${{ matrix.os }}
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install cargo-bundle (macOS)
-        if: runner.os == 'macOS'
+      - name: Install cargo-bundle
         run: cargo install cargo-bundle --locked --version 0.10.0
 
-      - name: Build (Windows)
-        if: runner.os == 'Windows'
-        run: cargo build --release --target ${{ matrix.target }}
-
-      - name: Build + Bundle (macOS)
-        if: runner.os == 'macOS'
+      - name: Build + Bundle
         run: cargo bundle --release --target ${{ matrix.target }}
 
-      - name: Sign with hardened runtime (macOS)
+      - name: Sign with hardened runtime
         # Required for macOS Tahoe (26.x): without --options runtime the
         # status item silently fails to render in the menu bar when launched
         # from /Applications, and ImageIO PNG decoding crashes with SIGBUS
         # when launched from adhoc-signed parents (e.g. Homebrew fish).
-        if: runner.os == 'macOS'
         run: |
           codesign --force --options runtime --sign - \
             "target/${{ matrix.target }}/release/bundle/osx/gh-tray.app"
 
-      - name: Package (macOS)
-        if: runner.os == 'macOS'
+      - name: Package
         run: |
-          tar -czf "${{ matrix.archive }}" -C "target/${{ matrix.target }}/release/bundle/osx" "gh-tray.app"
-          shasum -a 256 "${{ matrix.archive }}" | awk '{print $1}' | tr -d '\n' > "${{ matrix.archive }}.sha256"
-
-      - name: Package (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          Compress-Archive -Path "target/${{ matrix.target }}/release/${{ matrix.binary }}" -DestinationPath "${{ matrix.archive }}"
-          $hash = (Get-FileHash -Algorithm SHA256 "${{ matrix.archive }}").Hash.ToLower()
-          Set-Content -Path "${{ matrix.archive }}.sha256" -Value $hash -NoNewline
+          archive="gh-tray-${{ matrix.target }}.tar.gz"
+          tar -czf "$archive" -C "target/${{ matrix.target }}/release/bundle/osx" "gh-tray.app"
+          shasum -a 256 "$archive" | awk '{print $1}' | tr -d '\n' > "$archive.sha256"
 
       - uses: actions/upload-artifact@v4
         with:
           name: gh-tray-${{ matrix.target }}
           path: |
-            ${{ matrix.archive }}
-            ${{ matrix.archive }}.sha256
+            gh-tray-${{ matrix.target }}.tar.gz
+            gh-tray-${{ matrix.target }}.tar.gz.sha256
 
   release:
     needs: build
@@ -128,20 +103,19 @@ jobs:
       - name: Read SHA256s
         id: sha
         run: |
-          echo "win=$(cat gh-tray-x86_64-pc-windows-msvc/gh-tray-x86_64-pc-windows-msvc.zip.sha256)" >> "$GITHUB_OUTPUT"
           echo "arm=$(cat gh-tray-aarch64-apple-darwin/gh-tray-aarch64-apple-darwin.tar.gz.sha256)" >> "$GITHUB_OUTPUT"
           echo "intel=$(cat gh-tray-x86_64-apple-darwin/gh-tray-x86_64-apple-darwin.tar.gz.sha256)" >> "$GITHUB_OUTPUT"
 
-      - name: Update Scoop manifest and Homebrew formula
+      - name: Update Homebrew cask
         env:
           VERSION: ${{ github.ref_name }}
         run: |
-          ./scripts/update-packaging.sh "${VERSION#v}" "${{ steps.sha.outputs.win }}" "${{ steps.sha.outputs.arm }}" "${{ steps.sha.outputs.intel }}"
+          python3 scripts/update_cask.py "${VERSION#v}" "${{ steps.sha.outputs.arm }}" "${{ steps.sha.outputs.intel }}" Casks/gh-tray.rb
 
       - name: Commit and push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add bucket/gh-tray.json Casks/gh-tray.rb
-          git diff --cached --quiet || git commit -m "chore: update scoop manifest and homebrew formula for ${{ github.ref_name }}"
+          git add Casks/gh-tray.rb
+          git diff --cached --quiet || git commit -m "chore: update homebrew cask for ${{ github.ref_name }}"
           git push origin HEAD:main

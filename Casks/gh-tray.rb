@@ -7,7 +7,7 @@ cask "gh-tray" do
 
   url "https://github.com/jsfr/gh-tray-rs/releases/download/v#{version}/gh-tray-#{arch}-apple-darwin.tar.gz"
   name "gh-tray"
-  desc "Cross-platform system tray app monitoring GitHub PRs"
+  desc "Menu bar app monitoring GitHub pull requests"
   homepage "https://github.com/jsfr/gh-tray-rs"
 
   depends_on :macos

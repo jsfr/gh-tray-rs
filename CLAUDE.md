@@ -22,7 +22,10 @@ All commands use `just`:
 
 ## Architecture
 
-Cross-platform system tray app monitoring GitHub PRs. Uses native OS menus.
+macOS menu bar app monitoring GitHub PRs. Uses native macOS menus.
+
+macOS is the only supported platform. The code has no platform `cfg` branches:
+do not add Windows or Linux paths back.
 
 ### Source Files
 
@@ -37,20 +40,18 @@ Cross-platform system tray app monitoring GitHub PRs. Uses native OS menus.
 
 ## Packaging
 
-The repository is also its own Homebrew tap and Scoop bucket. Users add it with
-`brew tap jsfr/gh-tray-rs` or `scoop bucket add gh-tray-rs`. A change to these
-files reaches users on the next `brew update` or `scoop update`.
+The repository is also its own Homebrew tap. Users add it with
+`brew tap jsfr/gh-tray-rs`. A change to the cask reaches users on the next
+`brew update`.
 
-- `Casks/gh-tray.rb` — Homebrew cask (macOS)
-- `bucket/gh-tray.json` — Scoop manifest (Windows)
-- `scripts/update-packaging.sh` — rewrites version + sha256 in both files for a
-  release. Arguments: `<version> <sha_win> <sha_mac_arm> <sha_mac_intel>`.
-- `scripts/update_cask.py` — cask half of that rewrite
-- `scripts/tests/` — tests for both scripts. Run the files directly; `just test`
+- `Casks/gh-tray.rb` — Homebrew cask
+- `scripts/update_cask.py` — rewrites version + sha256 in the cask for a
+  release. Arguments: `<version> <sha_mac_arm> <sha_mac_intel> <cask_path>`.
+- `scripts/tests/` — tests for that script. Run the files directly; `just test`
   does not include them.
 - `cliff.toml` — git-cliff config
 
-The release scripts rewrite only `version` and the `sha256` lines, so other
+The release script rewrites only `version` and the `sha256` lines, so other
 stanzas are safe to edit by hand.
 
 To check the cask, copy it into the tap clone at
