@@ -1,9 +1,9 @@
 cask "gh-tray" do
   arch arm: "aarch64", intel: "x86_64"
 
-  version "0.0.9"
-  sha256 arm:   "db94ecd2697b86e0fefe06b9c8958564aa6bebac80f415645e0e8ab939b041ea",
-         intel: "c6f3a18ab42bc5739d98444dd0c7fde343baf1207d0418179d4117e3e97e8108"
+  version "0.0.10"
+  sha256 arm:   "39a266cba8ead9ec2b4fded8f9ec96802557c1d914b86ac70406a4b917cc7663",
+         intel: "89496cbba83e811a8d654ab420514b0328981cee4e7bb9f63d072ff37b121325"
 
   url "https://github.com/jsfr/gh-tray-rs/releases/download/v#{version}/gh-tray-#{arch}-apple-darwin.tar.gz"
   name "gh-tray"
