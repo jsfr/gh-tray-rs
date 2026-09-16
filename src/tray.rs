@@ -1,5 +1,4 @@
 use crate::types::*;
-use image::{Rgba, RgbaImage};
 use muda::{Menu, MenuId, MenuItem, PredefinedMenuItem};
 use std::collections::HashMap;
 use tray_icon::Icon;
@@ -58,16 +57,28 @@ fn repo_name(name_with_owner: &str) -> &str {
         .map_or(name_with_owner, |(_, name)| name)
 }
 
+/// Width and height of the tray icon in pixels.
+const ICON_SIZE: u32 = 32;
+
 /// Render a count as a 32x32 RGBA icon (number on colored circle).
 pub fn render_icon(text: &str, is_dark: bool) -> Icon {
-    let size = 32u32;
-    let mut img = RgbaImage::new(size, size);
+    Icon::from_rgba(render_icon_rgba(text, is_dark), ICON_SIZE, ICON_SIZE)
+        .expect("Failed to create icon")
+}
 
+/// The pixel work behind [`render_icon`], kept separate so it can be tested
+/// without building a real tray icon.
+fn render_icon_rgba(text: &str, is_dark: bool) -> Vec<u8> {
+    use ab_glyph::{Font, FontRef, PxScale, ScaleFont, point};
+
+    let size = ICON_SIZE;
     let (bg, fg) = if is_dark {
-        (Rgba([255, 255, 255, 255]), Rgba([30, 30, 30, 255]))
+        ([255, 255, 255, 255], [30, 30, 30])
     } else {
-        (Rgba([60, 60, 60, 255]), Rgba([255, 255, 255, 255]))
+        ([60, 60, 60, 255], [255, 255, 255])
     };
+
+    let mut pixels = vec![0u8; (size * size * 4) as usize];
 
     // Draw filled circle
     let center = (size / 2) as f32;
@@ -77,18 +88,18 @@ pub fn render_icon(text: &str, is_dark: bool) -> Icon {
             let dx = x as f32 - center;
             let dy = y as f32 - center;
             if dx * dx + dy * dy <= radius * radius {
-                img.put_pixel(x, y, bg);
+                let i = ((y * size + x) * 4) as usize;
+                pixels[i..i + 4].copy_from_slice(&bg);
             }
         }
     }
 
     // Draw text centered on the circle using font metrics
     let font_data = include_bytes!("../assets/Inter-Bold.ttf");
-    let font = ab_glyph::FontRef::try_from_slice(font_data).expect("Failed to load embedded font");
+    let font = FontRef::try_from_slice(font_data).expect("Failed to load embedded font");
 
-    use ab_glyph::{Font, ScaleFont};
     let scale = if text.len() > 2 { 18.0 } else { 24.0 };
-    let px_scale = ab_glyph::PxScale::from(scale);
+    let px_scale = PxScale::from(scale);
     let scaled_font = font.as_scaled(px_scale);
 
     // Measure actual text width using glyph advances
@@ -100,17 +111,56 @@ pub fn render_icon(text: &str, is_dark: bool) -> Icon {
         })
         .sum();
 
-    // Vertical centering: draw_text_mut y is the top of the text line.
-    // For digits (no descenders), visual height is just the ascent.
+    // Vertical centering: the glyph origin sits on the baseline, one ascent
+    // below the top of the text line. Digits have no descenders, so the visual
+    // height is just the ascent.
     let ascent = scaled_font.ascent();
-
     let x_offset = ((size as f32 - text_width) / 2.0).round() as i32;
     let y_offset = ((size as f32 - ascent) / 2.0).round() as i32;
 
-    imageproc::drawing::draw_text_mut(&mut img, fg, x_offset, y_offset, px_scale, &font, text);
+    // Walk the baseline, blending each glyph's coverage over the circle
+    let mut caret = 0.0;
+    for ch in text.chars() {
+        let glyph_id = scaled_font.glyph_id(ch);
+        let glyph = glyph_id.with_scale_and_position(px_scale, point(caret, ascent));
+        caret += scaled_font.h_advance(glyph_id);
 
-    let rgba = img.into_raw();
-    Icon::from_rgba(rgba, size, size).expect("Failed to create icon")
+        let Some(outlined) = font.outline_glyph(glyph) else {
+            continue;
+        };
+        let bounds = outlined.px_bounds();
+        let origin_x = x_offset + bounds.min.x.round() as i32;
+        let origin_y = y_offset + bounds.min.y.round() as i32;
+
+        outlined.draw(|glyph_x, glyph_y, coverage| {
+            let x = origin_x + glyph_x as i32;
+            let y = origin_y + glyph_y as i32;
+            if x < 0 || y < 0 || x >= size as i32 || y >= size as i32 {
+                return;
+            }
+            let i = ((y as u32 * size + x as u32) * 4) as usize;
+            blend_over(&mut pixels[i..i + 4], fg, coverage.clamp(0.0, 1.0));
+        });
+    }
+
+    pixels
+}
+
+/// Composite `rgb` over one RGBA pixel with the given coverage, source-over.
+fn blend_over(dst: &mut [u8], rgb: [u8; 3], coverage: f32) {
+    let dst_alpha = f32::from(dst[3]) / 255.0;
+    let out_alpha = coverage + dst_alpha * (1.0 - coverage);
+    if out_alpha <= 0.0 {
+        return;
+    }
+
+    for channel in 0..3 {
+        let src = f32::from(rgb[channel]) / 255.0;
+        let existing = f32::from(dst[channel]) / 255.0;
+        let blended = (src * coverage + existing * dst_alpha * (1.0 - coverage)) / out_alpha;
+        dst[channel] = (blended * 255.0).round().clamp(0.0, 255.0) as u8;
+    }
+    dst[3] = (out_alpha * 255.0).round().clamp(0.0, 255.0) as u8;
 }
 
 /// Build the full tray menu from a PR group.
@@ -326,6 +376,77 @@ mod tests {
             viewer_review_state: None,
             has_conflicts: false,
         }
+    }
+
+    fn pixel(buf: &[u8], x: u32, y: u32) -> [u8; 4] {
+        let i = ((y * ICON_SIZE + x) * 4) as usize;
+        [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]
+    }
+
+    /// Fully covered glyph pixels land within a channel or two of the
+    /// foreground colour, depending on how coverage is composited.
+    fn is_opaque_fg(p: [u8; 4], fg: [u8; 3]) -> bool {
+        p[3] == 255 && (0..3).all(|i| p[i].abs_diff(fg[i]) <= 3)
+    }
+
+    const LIGHT_FG: [u8; 3] = [255, 255, 255];
+
+    #[test]
+    fn icon_buffer_is_32x32_rgba() {
+        let buf = render_icon_rgba("8", false);
+        assert_eq!(buf.len() as u32, ICON_SIZE * ICON_SIZE * 4);
+    }
+
+    #[test]
+    fn icon_corners_stay_transparent() {
+        let buf = render_icon_rgba("8", false);
+        assert_eq!(pixel(&buf, 0, 0)[3], 0);
+        assert_eq!(pixel(&buf, ICON_SIZE - 1, ICON_SIZE - 1)[3], 0);
+    }
+
+    #[test]
+    fn icon_circle_is_filled_with_the_background_colour() {
+        // (2, 16) is inside the circle and clear of the glyphs
+        assert_eq!(
+            pixel(&render_icon_rgba("8", false), 2, 16),
+            [60, 60, 60, 255]
+        );
+        assert_eq!(
+            pixel(&render_icon_rgba("8", true), 2, 16),
+            [255, 255, 255, 255]
+        );
+    }
+
+    #[test]
+    fn icon_draws_the_text_in_the_foreground_colour() {
+        let buf = render_icon_rgba("8", false);
+        let fg_pixels = (0..ICON_SIZE)
+            .flat_map(|y| (0..ICON_SIZE).map(move |x| (x, y)))
+            .filter(|&(x, y)| is_opaque_fg(pixel(&buf, x, y), LIGHT_FG))
+            .count();
+        assert!(fg_pixels > 10, "expected glyph pixels, found {fg_pixels}");
+    }
+
+    #[test]
+    fn icon_text_is_centred() {
+        let buf = render_icon_rgba("8", false);
+        let lit: Vec<(u32, u32)> = (0..ICON_SIZE)
+            .flat_map(|y| (0..ICON_SIZE).map(move |x| (x, y)))
+            .filter(|&(x, y)| is_opaque_fg(pixel(&buf, x, y), LIGHT_FG))
+            .collect();
+        let mid_x = (lit.iter().map(|&(x, _)| x).min().unwrap()
+            + lit.iter().map(|&(x, _)| x).max().unwrap())
+            / 2;
+        let mid_y = (lit.iter().map(|&(_, y)| y).min().unwrap()
+            + lit.iter().map(|&(_, y)| y).max().unwrap())
+            / 2;
+        assert!(mid_x.abs_diff(ICON_SIZE / 2) <= 3, "x centre off: {mid_x}");
+        assert!(mid_y.abs_diff(ICON_SIZE / 2) <= 3, "y centre off: {mid_y}");
+    }
+
+    #[test]
+    fn dark_and_light_icons_differ() {
+        assert_ne!(render_icon_rgba("8", true), render_icon_rgba("8", false));
     }
 
     #[test]

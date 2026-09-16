@@ -11,15 +11,15 @@ mod types;
 use clap::Parser;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, hotkey::HotKey};
 use muda::MenuEvent;
+use objc2::MainThreadMarker;
+use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSEventMask};
+use objc2_foundation::{NSDate, NSDefaultRunLoopMode};
 use std::sync::mpsc;
 use std::time::Duration;
 use tray_icon::TrayIconBuilder;
-use winit::application::ApplicationHandler;
-use winit::event::StartCause;
-use winit::event::WindowEvent;
-use winit::event_loop::{ActiveEventLoop, EventLoopBuilder};
-use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
-use winit::window::WindowId;
+
+/// How long the pump waits for an AppKit event before draining queues again.
+const PUMP_TIMEOUT_SECS: f64 = 0.25;
 
 /// Menu clicks, each paired with the modifier state read as the click happened.
 static MENU_CLICKS: std::sync::Mutex<Vec<(muda::MenuId, bool)>> = std::sync::Mutex::new(Vec::new());
@@ -47,40 +47,32 @@ struct App {
     auto_start_enabled: bool,
     last_updated: Option<String>,
     is_stale: bool,
+    should_exit: bool,
 }
 
-impl ApplicationHandler for App {
-    fn new_events(&mut self, _event_loop: &ActiveEventLoop, cause: StartCause) {
-        if cause == StartCause::Init {
-            // Create tray icon here — on macOS it must be created after the event loop starts
-            let is_dark = theme::is_dark_theme();
-            let icon = tray::render_icon("...", is_dark);
-            let (loading_menu, loading_actions) =
-                tray::build_menu(&types::PullRequestGroup::default(), false, None, false);
+impl App {
+    /// Create the status item. NSApp has to exist first, so this runs after
+    /// `finishLaunching` rather than in the constructor.
+    fn create_tray_icon(&mut self) {
+        let is_dark = theme::is_dark_theme();
+        let icon = tray::render_icon("...", is_dark);
+        let (loading_menu, loading_actions) =
+            tray::build_menu(&types::PullRequestGroup::default(), false, None, false);
 
-            let tray_icon = TrayIconBuilder::new()
-                .with_icon(icon)
-                .with_menu(Box::new(loading_menu))
-                .with_tooltip("gh-tray: loading...")
-                .build()
-                .expect("Failed to create tray icon");
+        let tray_icon = TrayIconBuilder::new()
+            .with_icon(icon)
+            .with_menu(Box::new(loading_menu))
+            .with_tooltip("gh-tray: loading...")
+            .build()
+            .expect("Failed to create tray icon");
 
-            self.tray_icon = Some(tray_icon);
-            self.menu_actions = loading_actions;
-        }
+        self.tray_icon = Some(tray_icon);
+        self.menu_actions = loading_actions;
     }
 
-    fn resumed(&mut self, _event_loop: &ActiveEventLoop) {}
-
-    fn window_event(
-        &mut self,
-        _event_loop: &ActiveEventLoop,
-        _window_id: WindowId,
-        _event: WindowEvent,
-    ) {
-    }
-
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+    /// Handle everything queued since the last pass: menu clicks, hotkeys and
+    /// poll results.
+    fn drain(&mut self) {
         // Process menu events
         let clicks: Vec<(muda::MenuId, bool)> = MENU_CLICKS
             .lock()
@@ -106,7 +98,7 @@ impl ApplicationHandler for App {
                         self.rebuild_menu();
                     }
                     tray::MenuAction::Quit => {
-                        event_loop.exit();
+                        self.should_exit = true;
                     }
                 }
             }
@@ -133,6 +125,7 @@ impl ApplicationHandler for App {
                     if let Some(tray) = &self.tray_icon {
                         let _ = tray.set_icon(Some(icon));
                         let _ = tray.set_tooltip(Some(&format!("gh-tray: {count} PRs")));
+                        tracing::debug!("Tray updated: {count} PRs");
                     }
 
                     self.rebuild_menu();
@@ -144,9 +137,7 @@ impl ApplicationHandler for App {
             }
         }
     }
-}
 
-impl App {
     fn rebuild_menu(&mut self) {
         let (menu, actions) = tray::build_menu(
             &self.last_group,
@@ -277,10 +268,11 @@ fn main() {
         std::process::exit(1);
     }
 
-    // Accessory activation policy keeps the app out of the Dock
-    let mut builder = EventLoopBuilder::default();
-    builder.with_activation_policy(ActivationPolicy::Accessory);
-    let event_loop = builder.build().expect("Failed to create event loop");
+    // Accessory activation policy keeps the app out of the Dock. The bundled
+    // .app also sets LSUIElement, so this matters when running the bare binary.
+    let mtm = MainThreadMarker::new().expect("main runs on the main thread");
+    let ns_app = NSApplication::sharedApplication(mtm);
+    ns_app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
 
     // Set up auto-launch
     let exe_path = std::env::current_exe()
@@ -360,7 +352,7 @@ fn main() {
     });
 
     let mut app = App {
-        tray_icon: None, // Created in new_events after event loop starts
+        tray_icon: None, // Created below, once NSApp is ready
         menu_actions: std::collections::HashMap::new(),
         last_group: types::PullRequestGroup::default(),
         rx,
@@ -368,7 +360,29 @@ fn main() {
         auto_start_enabled,
         last_updated: None,
         is_stale: false,
+        should_exit: false,
     };
 
-    event_loop.run_app(&mut app).expect("Event loop failed");
+    ns_app.finishLaunching();
+    app.create_tray_icon();
+
+    // Drive AppKit directly. `nextEventMatchingMask` blocks until an event
+    // arrives or the timeout expires, so an idle app sleeps, and work queued by
+    // the polling thread is picked up within one timeout.
+    while !app.should_exit {
+        app.drain();
+
+        let timeout = NSDate::dateWithTimeIntervalSinceNow(PUMP_TIMEOUT_SECS);
+        let event = unsafe {
+            ns_app.nextEventMatchingMask_untilDate_inMode_dequeue(
+                NSEventMask::Any,
+                Some(&timeout),
+                NSDefaultRunLoopMode,
+                true,
+            )
+        };
+        if let Some(event) = event {
+            ns_app.sendEvent(&event);
+        }
+    }
 }

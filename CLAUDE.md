@@ -27,6 +27,12 @@ macOS menu bar app monitoring GitHub PRs. Uses native macOS menus.
 macOS is the only supported platform. The code has no platform `cfg` branches:
 do not add Windows or Linux paths back.
 
+`main` drives AppKit directly through `objc2`: it creates the shared
+`NSApplication`, then pumps `nextEventMatchingMask` on a timeout and drains its
+queues between events. There is no windowing framework, and the app has no
+windows. The tray icon is drawn pixel by pixel with `ab_glyph`, so there is no
+image-processing dependency either.
+
 ### Source Files
 
 - `src/main.rs` — entry point, event loop, polling thread
