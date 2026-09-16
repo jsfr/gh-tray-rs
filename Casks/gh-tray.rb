@@ -21,6 +21,7 @@ cask "gh-tray" do
   end
 
   zap trash: [
+    "~/Library/LaunchAgents/gh-tray.plist",
     "~/Library/LaunchAgents/io.github.jsfr.gh-tray.plist",
     "~/Library/Preferences/io.github.jsfr.gh-tray.plist",
   ]
