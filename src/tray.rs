@@ -21,33 +21,53 @@ pub fn apply_modifier(action: MenuAction, shift_held: bool) -> MenuAction {
     }
 }
 
-/// Get the emoji prefix for a PR's status (priority order matches F# version).
-pub fn status_prefix(pr: &PullRequest) -> &'static str {
-    match (
-        pr.is_draft,
-        pr.has_conflicts,
-        &pr.check_status,
-        &pr.review_status,
-    ) {
-        (true, _, _, _) => "\u{1F6A7} ",                      // 🚧 Draft
-        (_, true, _, _) => "\u{2694}\u{FE0F} ",               // ⚔️ Conflicts
-        (_, _, Some(CheckStatus::Failure), _) => "\u{274C} ", // ❌ Check failure
-        (_, _, _, Some(ReviewStatus::ChangesRequested)) => "\u{1F44E} ", // 👎 Changes requested
-        (_, _, Some(CheckStatus::Pending), _) => "\u{23F3} ", // ⏳ Check pending
-        (_, _, _, Some(ReviewStatus::Approved)) => "\u{1F44D} ", // 👍 Approved
-        (_, _, Some(CheckStatus::Success), _) => "\u{2705} ", // ✅ Check success
-        _ => "",
+/// State marker when there is no draft flag, conflict or check result. An
+/// emoji keeps the label aligned with rows that have a state.
+const UNKNOWN_STATE: &str = "\u{2753} "; // ❓ Unknown state
+
+/// State marker for My PRs and Assigned: the first match wins.
+pub fn state_marker(pr: &PullRequest) -> &'static str {
+    match (pr.is_draft, pr.has_conflicts, &pr.check_status) {
+        (true, _, _) => "\u{1F6A7} ",                      // 🚧 Draft
+        (_, true, _) => "\u{2694}\u{FE0F} ",               // ⚔️ Conflicts
+        (_, _, Some(CheckStatus::Failure)) => "\u{274C} ", // ❌ Check failure
+        (_, _, Some(CheckStatus::Pending)) => "\u{23F3} ", // ⏳ Check pending
+        (_, _, Some(CheckStatus::Success)) => "\u{2705} ", // ✅ Check success
+        _ => UNKNOWN_STATE,
     }
 }
 
-/// Emoji prefix for the Review group: only viewer's review state matters.
-pub fn review_prefix(pr: &PullRequest) -> &'static str {
-    match &pr.viewer_review_state {
-        Some(ViewerReviewState::Approved) => "\u{1F44D} ", // 👍 Approved
-        Some(ViewerReviewState::ChangesRequested) => "\u{1F44E} ", // 👎 Changes requested
-        Some(ViewerReviewState::Commented) => "\u{1F4AC} ", // 💬 Commented
-        None => "\u{1F440} ",                              // 👀 Review requested
+/// Review marker for My PRs and Assigned. It shows even when the state marker
+/// reports a draft or a failure.
+pub fn review_marker(pr: &PullRequest) -> &'static str {
+    match &pr.review_status {
+        Some(ReviewStatus::ChangesRequested) => "\u{1F44E} ", // 👎 Changes requested
+        Some(ReviewStatus::Approved) => "\u{1F44D} ",         // 👍 Approved
+        Some(ReviewStatus::Commented) => "\u{1F4AC} ",        // 💬 Review comments
+        None => "\u{1F440} ",                                 // 👀 No review yet
     }
+}
+
+/// Prefix for My PRs and Assigned: state marker, then review marker.
+pub fn status_prefix(pr: &PullRequest) -> String {
+    format!("{}{}", state_marker(pr), review_marker(pr))
+}
+
+/// Prefix for the Review group. An open review request for the viewer, such
+/// as a re-request after changes were requested, overrides the viewer's
+/// latest review.
+pub fn review_prefix(pr: &PullRequest) -> String {
+    let marker = if pr.viewer_review_requested {
+        "\u{1F440} " // 👀 Review requested
+    } else {
+        match &pr.viewer_review_state {
+            Some(ViewerReviewState::Approved) => "\u{1F44D} ", // 👍 Approved
+            Some(ViewerReviewState::ChangesRequested) => "\u{1F44E} ", // 👎 Changes requested
+            Some(ViewerReviewState::Commented) => "\u{1F4AC} ", // 💬 Commented
+            None => "\u{1F440} ",                              // 👀 Review requested
+        }
+    };
+    marker.to_string()
 }
 
 /// Extract repo name from "owner/repo" format.
@@ -235,7 +255,7 @@ fn add_section(
     actions: &mut HashMap<MenuId, MenuAction>,
     header: &str,
     prs: &[PullRequest],
-    prefix_fn: fn(&PullRequest) -> &'static str,
+    prefix_fn: fn(&PullRequest) -> String,
 ) {
     if prs.is_empty() {
         return;
@@ -260,76 +280,81 @@ fn add_section(
 mod tests {
     use super::*;
 
+    const DRAFT: &str = "\u{1F6A7} ";
+    const CONFLICTS: &str = "\u{2694}\u{FE0F} ";
+    const FAILURE: &str = "\u{274C} ";
+    const PENDING: &str = "\u{23F3} ";
+    const SUCCESS: &str = "\u{2705} ";
+    const THUMBS_UP: &str = "\u{1F44D} ";
+    const THUMBS_DOWN: &str = "\u{1F44E} ";
+    const COMMENTS: &str = "\u{1F4AC} ";
+    const EYES: &str = "\u{1F440} ";
+
     #[test]
-    fn status_prefix_priority_order() {
-        // Draft takes priority over everything
-        let pr = PullRequest {
-            title: "test".into(),
-            url: "".into(),
-            number: 1,
-            repository: "o/r".into(),
-            is_draft: true,
-            check_status: Some(CheckStatus::Failure),
-            review_status: Some(ReviewStatus::ChangesRequested),
-            viewer_review_state: None,
-            has_conflicts: true,
-        };
-        assert_eq!(status_prefix(&pr), "\u{1F6A7} ");
+    fn state_marker_priority_order() {
+        let mut pr = make_test_pr(1);
+        pr.is_draft = true;
+        pr.has_conflicts = true;
+        pr.check_status = Some(CheckStatus::Failure);
+        assert_eq!(state_marker(&pr), DRAFT);
 
-        // Conflicts next
-        let pr = PullRequest {
-            is_draft: false,
-            has_conflicts: true,
-            check_status: Some(CheckStatus::Failure),
-            ..pr
-        };
-        assert_eq!(status_prefix(&pr), "\u{2694}\u{FE0F} ");
+        pr.is_draft = false;
+        assert_eq!(state_marker(&pr), CONFLICTS);
 
-        // Check failure next
-        let pr = PullRequest {
-            has_conflicts: false,
-            check_status: Some(CheckStatus::Failure),
-            review_status: Some(ReviewStatus::ChangesRequested),
-            ..pr
-        };
-        assert_eq!(status_prefix(&pr), "\u{274C} ");
+        pr.has_conflicts = false;
+        assert_eq!(state_marker(&pr), FAILURE);
 
-        // Changes requested next
-        let pr = PullRequest {
-            check_status: None,
-            review_status: Some(ReviewStatus::ChangesRequested),
-            ..pr
-        };
-        assert_eq!(status_prefix(&pr), "\u{1F44E} ");
+        pr.check_status = Some(CheckStatus::Pending);
+        assert_eq!(state_marker(&pr), PENDING);
+
+        pr.check_status = Some(CheckStatus::Success);
+        assert_eq!(state_marker(&pr), SUCCESS);
+
+        pr.check_status = None;
+        assert_eq!(state_marker(&pr), UNKNOWN_STATE);
     }
 
     #[test]
-    fn status_prefix_success_variants() {
-        let base = PullRequest {
-            title: "test".into(),
-            url: "".into(),
-            number: 1,
-            repository: "o/r".into(),
-            is_draft: false,
-            check_status: None,
-            review_status: None,
-            viewer_review_state: None,
-            has_conflicts: false,
-        };
+    fn state_marker_ignores_review_status() {
+        let mut pr = make_test_pr(1);
+        pr.review_status = Some(ReviewStatus::ChangesRequested);
+        assert_eq!(state_marker(&pr), UNKNOWN_STATE);
+    }
 
-        let pr = PullRequest {
-            review_status: Some(ReviewStatus::Approved),
-            ..base.clone()
-        };
-        assert_eq!(status_prefix(&pr), "\u{1F44D} ");
+    #[test]
+    fn review_marker_covers_every_review_status() {
+        let mut pr = make_test_pr(1);
+        assert_eq!(review_marker(&pr), EYES);
 
-        let pr = PullRequest {
-            check_status: Some(CheckStatus::Success),
-            ..base.clone()
-        };
-        assert_eq!(status_prefix(&pr), "\u{2705} ");
+        pr.review_status = Some(ReviewStatus::Commented);
+        assert_eq!(review_marker(&pr), COMMENTS);
 
-        assert_eq!(status_prefix(&base), "");
+        pr.review_status = Some(ReviewStatus::Approved);
+        assert_eq!(review_marker(&pr), THUMBS_UP);
+
+        pr.review_status = Some(ReviewStatus::ChangesRequested);
+        assert_eq!(review_marker(&pr), THUMBS_DOWN);
+    }
+
+    #[test]
+    fn status_prefix_puts_state_before_review() {
+        let mut pr = make_test_pr(1);
+        pr.check_status = Some(CheckStatus::Success);
+        assert_eq!(status_prefix(&pr), format!("{SUCCESS}{EYES}"));
+
+        pr.check_status = Some(CheckStatus::Failure);
+        pr.review_status = Some(ReviewStatus::Approved);
+        assert_eq!(status_prefix(&pr), format!("{FAILURE}{THUMBS_UP}"));
+
+        pr.is_draft = true;
+        pr.review_status = Some(ReviewStatus::Commented);
+        assert_eq!(status_prefix(&pr), format!("{DRAFT}{COMMENTS}"));
+    }
+
+    #[test]
+    fn status_prefix_without_state_keeps_alignment() {
+        let pr = make_test_pr(1);
+        assert_eq!(status_prefix(&pr), format!("{UNKNOWN_STATE}{EYES}"));
     }
 
     #[test]
@@ -374,6 +399,7 @@ mod tests {
             check_status: None,
             review_status: None,
             viewer_review_state: None,
+            viewer_review_requested: false,
             has_conflicts: false,
         }
     }
@@ -488,15 +514,29 @@ mod tests {
         pr.review_status = Some(ReviewStatus::Approved);
 
         pr.viewer_review_state = Some(ViewerReviewState::Approved);
-        assert_eq!(review_prefix(&pr), "\u{1F44D} ");
+        assert_eq!(review_prefix(&pr), THUMBS_UP);
 
         pr.viewer_review_state = Some(ViewerReviewState::ChangesRequested);
-        assert_eq!(review_prefix(&pr), "\u{1F44E} ");
+        assert_eq!(review_prefix(&pr), THUMBS_DOWN);
 
         pr.viewer_review_state = Some(ViewerReviewState::Commented);
-        assert_eq!(review_prefix(&pr), "\u{1F4AC} ");
+        assert_eq!(review_prefix(&pr), COMMENTS);
 
         pr.viewer_review_state = None;
-        assert_eq!(review_prefix(&pr), "\u{1F440} ");
+        assert_eq!(review_prefix(&pr), EYES);
+    }
+
+    #[test]
+    fn review_request_overrides_viewer_review_state() {
+        let mut pr = make_test_pr(1);
+        pr.viewer_review_requested = true;
+        for state in [
+            ViewerReviewState::Approved,
+            ViewerReviewState::ChangesRequested,
+            ViewerReviewState::Commented,
+        ] {
+            pr.viewer_review_state = Some(state);
+            assert_eq!(review_prefix(&pr), EYES);
+        }
     }
 }

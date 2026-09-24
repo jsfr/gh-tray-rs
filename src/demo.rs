@@ -45,7 +45,7 @@ pub fn demo_pull_requests() -> PullRequestGroup {
                 "Add dark mode support",
                 false,
                 Some(CheckStatus::Pending),
-                None,
+                Some(ReviewStatus::Commented),
                 false,
             ),
         ],
@@ -70,7 +70,7 @@ pub fn demo_pull_requests() -> PullRequestGroup {
             ),
         ],
         needs_review: vec![
-            with_review(
+            re_requested(with_review(
                 make_pr(
                     10,
                     "demo/lib",
@@ -81,7 +81,7 @@ pub fn demo_pull_requests() -> PullRequestGroup {
                     false,
                 ),
                 Some(ViewerReviewState::ChangesRequested),
-            ),
+            )),
             with_review(
                 make_pr(
                     11,
@@ -125,6 +125,7 @@ fn make_pr(
         check_status,
         review_status,
         viewer_review_state: None,
+        viewer_review_requested: false,
         has_conflicts,
     }
 }
@@ -132,6 +133,13 @@ fn make_pr(
 fn with_review(pr: PullRequest, state: Option<ViewerReviewState>) -> PullRequest {
     PullRequest {
         viewer_review_state: state,
+        ..pr
+    }
+}
+
+fn re_requested(pr: PullRequest) -> PullRequest {
+    PullRequest {
+        viewer_review_requested: true,
         ..pr
     }
 }

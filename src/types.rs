@@ -9,8 +9,7 @@ pub enum CheckStatus {
 pub enum ReviewStatus {
     Approved,
     ChangesRequested,
-    #[expect(dead_code)]
-    ReviewRequired,
+    Commented,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -30,6 +29,7 @@ pub struct PullRequest {
     pub check_status: Option<CheckStatus>,
     pub review_status: Option<ReviewStatus>,
     pub viewer_review_state: Option<ViewerReviewState>,
+    pub viewer_review_requested: bool,
     pub has_conflicts: bool,
 }
 
@@ -76,6 +76,7 @@ mod tests {
             check_status: None,
             review_status: None,
             viewer_review_state: None,
+            viewer_review_requested: false,
             has_conflicts: false,
         }
     }

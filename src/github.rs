@@ -57,8 +57,11 @@ query($searchQuery: String!) {
         assignees(first: 10) {
           nodes { login }
         }
-        reviews(last: 1, states: [APPROVED, CHANGES_REQUESTED]) {
-          nodes { state }
+        reviews(last: 20, states: [APPROVED, CHANGES_REQUESTED]) {
+          nodes { state author { __typename } }
+        }
+        commentedReviews: reviews(last: 20, states: [COMMENTED]) {
+          nodes { author { __typename login } }
         }
         viewerLatestReview { state }
         commits(last: 1) {
@@ -103,20 +106,21 @@ fn parse_response(json: &str, username: &str) -> Result<PullRequestGroup, String
     let mut needs_review = Vec::new();
 
     for node in nodes {
-        let Some(pr) = parse_pull_request(node) else {
+        let Some(mut pr) = parse_pull_request(node) else {
             continue;
         };
 
         let author = node["author"]["login"].as_str().unwrap_or("");
         let reviewers = parse_reviewer_logins(node);
         let assignees = parse_assignee_logins(node);
+        let is_requested = reviewers.iter().any(|r| r.eq_ignore_ascii_case(username));
+        pr.viewer_review_requested = is_requested;
 
         if author.eq_ignore_ascii_case(username) {
             mine.push(pr);
         } else if assignees.iter().any(|a| a.eq_ignore_ascii_case(username)) {
             assigned.push(pr);
         } else {
-            let is_requested = reviewers.iter().any(|r| r.eq_ignore_ascii_case(username));
             let has_open_review = matches!(
                 pr.viewer_review_state,
                 Some(ViewerReviewState::Commented | ViewerReviewState::ChangesRequested)
@@ -149,6 +153,7 @@ fn parse_pull_request(node: &serde_json::Value) -> Option<PullRequest> {
         check_status: parse_check_status(node),
         review_status: parse_review_status(node),
         viewer_review_state: parse_viewer_review_state(node),
+        viewer_review_requested: false,
         has_conflicts: node["mergeable"].as_str() == Some("CONFLICTING"),
     })
 }
@@ -174,15 +179,39 @@ fn parse_check_status(node: &serde_json::Value) -> Option<CheckStatus> {
     }
 }
 
-fn parse_review_status(node: &serde_json::Value) -> Option<ReviewStatus> {
-    let review_node = node["reviews"]["nodes"].as_array()?.first()?;
-    let state = review_node["state"].as_str()?;
+fn is_bot(review: &serde_json::Value) -> bool {
+    review["author"]["__typename"].as_str() == Some("Bot")
+}
 
-    match state {
-        "APPROVED" => Some(ReviewStatus::Approved),
-        "CHANGES_REQUESTED" => Some(ReviewStatus::ChangesRequested),
-        _ => None,
+/// The latest approval or change request wins. Without one, a comment review
+/// from someone other than the PR author gives `Commented`. Authors reply to
+/// review threads through their own comment reviews, so those do not count.
+/// Bots review almost every PR, so only their change requests count.
+fn parse_review_status(node: &serde_json::Value) -> Option<ReviewStatus> {
+    let decisive = node["reviews"]["nodes"].as_array().and_then(|nodes| {
+        nodes
+            .iter()
+            .rev()
+            .filter_map(|review| Some((review["state"].as_str()?, is_bot(review))))
+            .find(|&(state, bot)| !(bot && state == "APPROVED"))
+            .map(|(state, _)| state)
+    });
+
+    match decisive {
+        Some("APPROVED") => return Some(ReviewStatus::Approved),
+        Some("CHANGES_REQUESTED") => return Some(ReviewStatus::ChangesRequested),
+        _ => {}
     }
+
+    let author = node["author"]["login"].as_str().unwrap_or("");
+    let has_comment_review = node["commentedReviews"]["nodes"]
+        .as_array()?
+        .iter()
+        .filter(|review| !is_bot(review))
+        .filter_map(|review| review["author"]["login"].as_str())
+        .any(|login| !login.eq_ignore_ascii_case(author));
+
+    has_comment_review.then_some(ReviewStatus::Commented)
 }
 
 fn parse_reviewer_logins(node: &serde_json::Value) -> Vec<String> {
@@ -400,6 +429,101 @@ mod tests {
             group.needs_review[1].review_status,
             Some(ReviewStatus::ChangesRequested)
         );
+    }
+
+    fn review_node(author: &str, reviews: &str, commented: &str, requested: &str) -> String {
+        format!(
+            r#"{{
+                "title": "PR",
+                "url": "https://example.com/1",
+                "number": 1,
+                "isDraft": false,
+                "repository": {{ "nameWithOwner": "org/repo" }},
+                "author": {{ "login": "{author}" }},
+                "reviewRequests": {{ "nodes": [{requested}] }},
+                "assignees": {{ "nodes": [] }},
+                "reviews": {{ "nodes": [{reviews}] }},
+                "commentedReviews": {{ "nodes": [{commented}] }},
+                "viewerLatestReview": {{ "state": "CHANGES_REQUESTED" }},
+                "commits": {{ "nodes": [] }},
+                "mergeable": "MERGEABLE"
+            }}"#
+        )
+    }
+
+    fn parse_single(node: &str, username: &str) -> PullRequestGroup {
+        let json = format!(r#"{{ "data": {{ "search": {{ "nodes": [{node}] }} }} }}"#);
+        parse_response(&json, username).unwrap()
+    }
+
+    #[test]
+    fn comment_review_from_other_user_is_commented() {
+        let node = review_node("me", "", r#"{ "author": { "login": "reviewer" } }"#, "");
+        let group = parse_single(&node, "me");
+        assert_eq!(group.mine[0].review_status, Some(ReviewStatus::Commented));
+    }
+
+    #[test]
+    fn author_comment_reviews_do_not_count() {
+        let node = review_node("me", "", r#"{ "author": { "login": "Me" } }"#, "");
+        let group = parse_single(&node, "me");
+        assert_eq!(group.mine[0].review_status, None);
+    }
+
+    #[test]
+    fn decisive_review_beats_comment_review() {
+        let node = review_node(
+            "me",
+            r#"{ "state": "APPROVED" }"#,
+            r#"{ "author": { "login": "reviewer" } }"#,
+            "",
+        );
+        let group = parse_single(&node, "me");
+        assert_eq!(group.mine[0].review_status, Some(ReviewStatus::Approved));
+    }
+
+    #[test]
+    fn bot_comment_reviews_do_not_count() {
+        let bot =
+            r#"{ "author": { "__typename": "Bot", "login": "copilot-pull-request-reviewer" } }"#;
+        let group = parse_single(&review_node("me", "", bot, ""), "me");
+        assert_eq!(group.mine[0].review_status, None);
+    }
+
+    #[test]
+    fn bot_approval_is_skipped_for_earlier_human_review() {
+        let reviews = r#"{ "state": "CHANGES_REQUESTED", "author": { "__typename": "User" } },
+            { "state": "APPROVED", "author": { "__typename": "Bot" } }"#;
+        let group = parse_single(&review_node("me", reviews, "", ""), "me");
+        assert_eq!(
+            group.mine[0].review_status,
+            Some(ReviewStatus::ChangesRequested)
+        );
+
+        let reviews = r#"{ "state": "APPROVED", "author": { "__typename": "Bot" } }"#;
+        let group = parse_single(&review_node("me", reviews, "", ""), "me");
+        assert_eq!(group.mine[0].review_status, None);
+    }
+
+    #[test]
+    fn bot_change_request_counts() {
+        let reviews = r#"{ "state": "APPROVED", "author": { "__typename": "User" } },
+            { "state": "CHANGES_REQUESTED", "author": { "__typename": "Bot" } }"#;
+        let group = parse_single(&review_node("me", reviews, "", ""), "me");
+        assert_eq!(
+            group.mine[0].review_status,
+            Some(ReviewStatus::ChangesRequested)
+        );
+    }
+
+    #[test]
+    fn records_viewer_review_request() {
+        let requested = r#"{ "requestedReviewer": { "login": "TestUser" } }"#;
+        let group = parse_single(&review_node("other", "", "", requested), "testuser");
+        assert!(group.needs_review[0].viewer_review_requested);
+
+        let group = parse_single(&review_node("other", "", "", ""), "testuser");
+        assert!(!group.needs_review[0].viewer_review_requested);
     }
 
     #[test]
