@@ -45,6 +45,7 @@ query($searchQuery: String!) {
         url
         number
         isDraft
+        reviewDecision
         repository { nameWithOwner }
         author { login }
         reviewRequests(first: 10) {
@@ -183,11 +184,18 @@ fn is_bot(review: &serde_json::Value) -> bool {
     review["author"]["__typename"].as_str() == Some("Bot")
 }
 
-/// The latest approval or change request wins. Without one, a comment review
-/// from someone other than the PR author gives `Commented`. Authors reply to
-/// review threads through their own comment reviews, so those do not count.
-/// Bots review almost every PR, so only their change requests count.
+/// Use GitHub's overall review decision when available. Required reviews must
+/// not appear approved based on individual reviews. Without a decision, use
+/// the latest approval or change request, then non-author comment reviews.
+/// In that fallback, bot approvals and bot comments do not count.
 fn parse_review_status(node: &serde_json::Value) -> Option<ReviewStatus> {
+    match node["reviewDecision"].as_str() {
+        Some("APPROVED") => return Some(ReviewStatus::Approved),
+        Some("CHANGES_REQUESTED") => return Some(ReviewStatus::ChangesRequested),
+        Some("REVIEW_REQUIRED") => return None,
+        _ => {}
+    }
+
     let decisive = node["reviews"]["nodes"].as_array().and_then(|nodes| {
         nodes
             .iter()
@@ -514,6 +522,98 @@ mod tests {
             group.mine[0].review_status,
             Some(ReviewStatus::ChangesRequested)
         );
+    }
+
+    #[test]
+    fn required_team_review_prevents_approved_status() {
+        let reviews = r#"{ "state": "APPROVED", "author": { "__typename": "User" } },
+            { "state": "APPROVED", "author": { "__typename": "User" } }"#;
+        let requested =
+            r#"{ "requestedReviewer": { "__typename": "Team", "slug": "members-experience" } }"#;
+        let mut node: serde_json::Value =
+            serde_json::from_str(&review_node("me", reviews, "", requested)).unwrap();
+        node["reviewDecision"] = serde_json::json!("REVIEW_REQUIRED");
+
+        let group = parse_single(&node.to_string(), "me");
+        assert_eq!(group.mine[0].review_status, None);
+    }
+
+    #[test]
+    fn review_decision_takes_precedence_over_individual_reviews() {
+        let cases = [
+            (
+                "CHANGES_REQUESTED",
+                "APPROVED",
+                Some(ReviewStatus::ChangesRequested),
+            ),
+            (
+                "APPROVED",
+                "CHANGES_REQUESTED",
+                Some(ReviewStatus::Approved),
+            ),
+            ("REVIEW_REQUIRED", "CHANGES_REQUESTED", None),
+        ];
+        for (decision, review, expected) in cases {
+            let reviews =
+                format!(r#"{{ "state": "{review}", "author": {{ "__typename": "User" }} }}"#);
+            let mut node: serde_json::Value =
+                serde_json::from_str(&review_node("me", &reviews, "", "")).unwrap();
+            node["reviewDecision"] = serde_json::json!(decision);
+
+            let group = parse_single(&node.to_string(), "me");
+            assert_eq!(group.mine[0].review_status, expected, "{decision}");
+        }
+    }
+
+    #[test]
+    fn review_decision_does_not_need_individual_reviews() {
+        let cases = [
+            ("APPROVED", Some(ReviewStatus::Approved)),
+            ("CHANGES_REQUESTED", Some(ReviewStatus::ChangesRequested)),
+            ("REVIEW_REQUIRED", None),
+        ];
+        for (decision, expected) in cases {
+            let mut node: serde_json::Value =
+                serde_json::from_str(&review_node("me", "", "", "")).unwrap();
+            node["reviewDecision"] = serde_json::json!(decision);
+
+            let group = parse_single(&node.to_string(), "me");
+            assert_eq!(group.mine[0].review_status, expected, "{decision}");
+        }
+    }
+
+    #[test]
+    fn null_review_decision_keeps_review_fallback() {
+        let cases = [
+            (
+                r#"{ "state": "APPROVED", "author": { "__typename": "User" } }"#,
+                "",
+                Some(ReviewStatus::Approved),
+            ),
+            (
+                r#"{ "state": "APPROVED", "author": { "__typename": "Bot" } }"#,
+                "",
+                None,
+            ),
+            (
+                r#"{ "state": "CHANGES_REQUESTED", "author": { "__typename": "Bot" } }"#,
+                "",
+                Some(ReviewStatus::ChangesRequested),
+            ),
+            (
+                "",
+                r#"{ "author": { "__typename": "User", "login": "reviewer" } }"#,
+                Some(ReviewStatus::Commented),
+            ),
+        ];
+        for (reviews, comments, expected) in cases {
+            let mut node: serde_json::Value =
+                serde_json::from_str(&review_node("me", reviews, comments, "")).unwrap();
+            node["reviewDecision"] = serde_json::Value::Null;
+
+            let group = parse_single(&node.to_string(), "me");
+            assert_eq!(group.mine[0].review_status, expected);
+        }
     }
 
     #[test]
