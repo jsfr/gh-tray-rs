@@ -2,6 +2,8 @@
 
 macOS menu bar app monitoring GitHub pull requests.
 
+<img src="docs/screenshots/menu.png" width="342" alt="The gh-tray menu with pull requests grouped under My PRs, Assigned and Review">
+
 ## Usage
 
 Click a pull request in the menu to open it in the browser. Hold ⇧ and
