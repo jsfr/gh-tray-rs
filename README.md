@@ -2,7 +2,7 @@
 
 macOS menu bar app monitoring GitHub pull requests.
 
-<img src="docs/screenshots/menu.png" width="342" alt="The gh-tray menu with pull requests grouped under My PRs, Assigned and Review">
+<img src="docs/screenshots/menu.png" width="280" alt="The gh-tray menu with pull requests grouped under My PRs, Assigned and Review">
 
 ## Usage
 
@@ -22,14 +22,3 @@ The `.app` is not code-signed. macOS will block it on first launch with a "canno
 
 - Right-click `gh-tray.app` in Finder → Open → Open, **or**
 - Run: `xattr -d com.apple.quarantine /Applications/gh-tray.app`
-
-### Migrating from a prior Formula install
-
-If you installed gh-tray before v0.0.4:
-
-```sh
-brew uninstall gh-tray
-brew untap  jsfr/gh-tray-rs
-brew tap    jsfr/gh-tray-rs https://github.com/jsfr/gh-tray-rs
-brew install --cask jsfr/gh-tray-rs/gh-tray
-```
