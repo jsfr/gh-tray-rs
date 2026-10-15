@@ -1,6 +1,7 @@
 use crate::types::*;
-use muda::{Menu, MenuId, MenuItem, PredefinedMenuItem};
-use std::collections::HashMap;
+use muda::{ContextMenu, Menu, MenuId, MenuItem, PredefinedMenuItem};
+use objc2_app_kit::NSMenu;
+use std::collections::{HashMap, HashSet};
 use tray_icon::Icon;
 
 /// Actions that can be triggered from menu items.
@@ -75,6 +76,51 @@ fn repo_name(name_with_owner: &str) -> &str {
     name_with_owner
         .split_once('/')
         .map_or(name_with_owner, |(_, name)| name)
+}
+
+/// Group PRs by "owner/repo". Repos keep the order of their first PR, and PRs
+/// keep their order within a repo.
+fn group_by_repo(prs: &[PullRequest]) -> Vec<(&str, Vec<&PullRequest>)> {
+    let mut groups: Vec<(&str, Vec<&PullRequest>)> = Vec::new();
+    for pr in prs {
+        match groups.iter_mut().find(|(repo, _)| *repo == pr.repository) {
+            Some((_, members)) => members.push(pr),
+            None => groups.push((&pr.repository, vec![pr])),
+        }
+    }
+    groups
+}
+
+/// Repo names that more than one owner uses anywhere in the menu.
+fn ambiguous_repo_names(group: &PullRequestGroup) -> HashSet<&str> {
+    let mut owners: HashMap<&str, HashSet<&str>> = HashMap::new();
+    for pr in group
+        .mine
+        .iter()
+        .chain(&group.assigned)
+        .chain(&group.needs_review)
+    {
+        owners
+            .entry(repo_name(&pr.repository))
+            .or_default()
+            .insert(&pr.repository);
+    }
+    owners
+        .into_iter()
+        .filter(|(_, full_names)| full_names.len() > 1)
+        .map(|(name, _)| name)
+        .collect()
+}
+
+/// Header for a repo group: the repo name, or "owner/repo" when the name alone
+/// is ambiguous.
+fn repo_label<'a>(name_with_owner: &'a str, ambiguous: &HashSet<&str>) -> &'a str {
+    let name = repo_name(name_with_owner);
+    if ambiguous.contains(name) {
+        name_with_owner
+    } else {
+        name
+    }
 }
 
 /// Width and height of the tray icon in pixels.
@@ -192,14 +238,23 @@ pub fn build_menu(
 ) -> (Menu, HashMap<MenuId, MenuAction>) {
     let menu = Menu::new();
     let mut actions = HashMap::new();
+    let ambiguous = ambiguous_repo_names(group);
 
-    add_section(&menu, &mut actions, "My PRs", &group.mine, status_prefix);
+    add_section(
+        &menu,
+        &mut actions,
+        "My PRs",
+        &group.mine,
+        status_prefix,
+        &ambiguous,
+    );
     add_section(
         &menu,
         &mut actions,
         "Assigned",
         &group.assigned,
         status_prefix,
+        &ambiguous,
     );
     add_section(
         &menu,
@@ -207,6 +262,7 @@ pub fn build_menu(
         "Review",
         &group.needs_review,
         review_prefix,
+        &ambiguous,
     );
 
     let _ = menu.append(&PredefinedMenuItem::separator());
@@ -256,6 +312,7 @@ fn add_section(
     header: &str,
     prs: &[PullRequest],
     prefix_fn: fn(&PullRequest) -> String,
+    ambiguous: &HashSet<&str>,
 ) {
     if prs.is_empty() {
         return;
@@ -266,13 +323,30 @@ fn add_section(
     let _ = menu.append(&header_item);
     let _ = menu.append(&PredefinedMenuItem::separator());
 
-    for pr in prs {
-        let prefix = prefix_fn(pr);
-        let repo = repo_name(&pr.repository);
-        let label = format!("{prefix}{repo}#{} {}", pr.number, pr.title);
-        let item = MenuItem::new(&label, true, None);
-        actions.insert(item.id().clone(), MenuAction::OpenUrl(pr.url.clone()));
-        let _ = menu.append(&item);
+    for (repo, repo_prs) in group_by_repo(prs) {
+        // Repo header (disabled menu item, acts as label)
+        let repo_item = MenuItem::new(repo_label(repo, ambiguous), false, None);
+        let _ = menu.append(&repo_item);
+
+        for pr in repo_prs {
+            let prefix = prefix_fn(pr);
+            let label = format!("{prefix}#{} {}", pr.number, pr.title);
+            let item = MenuItem::new(&label, true, None);
+            actions.insert(item.id().clone(), MenuAction::OpenUrl(pr.url.clone()));
+            append_indented(menu, &item);
+        }
+    }
+}
+
+/// Append an item one indentation level in, under its repo header.
+fn append_indented(menu: &Menu, item: &MenuItem) {
+    let _ = menu.append(item);
+
+    // muda has no indentation API, so set it on the NSMenuItem it just added
+    // SAFETY: `ns_menu` points to the NSMenu that `menu` owns and keeps alive.
+    let ns_menu = unsafe { &*menu.ns_menu().cast::<NSMenu>() };
+    if let Some(ns_item) = ns_menu.itemAtIndex(ns_menu.numberOfItems() - 1) {
+        ns_item.setIndentationLevel(1);
     }
 }
 
@@ -364,6 +438,50 @@ mod tests {
     }
 
     #[test]
+    fn group_by_repo_orders_repos_by_their_first_pr() {
+        let prs = [
+            pr_in("org/app", 1),
+            pr_in("org/api", 2),
+            pr_in("org/app", 3),
+        ];
+        assert_eq!(
+            pr_numbers(&group_by_repo(&prs)),
+            [("org/app", vec![1, 3]), ("org/api", vec![2])]
+        );
+    }
+
+    #[test]
+    fn group_by_repo_keeps_owners_apart() {
+        let prs = [pr_in("one/app", 1), pr_in("two/app", 2)];
+        assert_eq!(
+            pr_numbers(&group_by_repo(&prs)),
+            [("one/app", vec![1]), ("two/app", vec![2])]
+        );
+    }
+
+    #[test]
+    fn group_by_repo_of_no_prs_is_empty() {
+        assert!(group_by_repo(&[]).is_empty());
+    }
+
+    #[test]
+    fn ambiguous_repo_names_spans_all_sections() {
+        let group = PullRequestGroup {
+            mine: vec![pr_in("one/app", 1), pr_in("org/lib", 2)],
+            assigned: vec![],
+            needs_review: vec![pr_in("two/app", 3), pr_in("org/lib", 4)],
+        };
+        assert_eq!(ambiguous_repo_names(&group), HashSet::from(["app"]));
+    }
+
+    #[test]
+    fn repo_label_names_the_owner_only_when_ambiguous() {
+        let ambiguous = HashSet::from(["app"]);
+        assert_eq!(repo_label("one/app", &ambiguous), "one/app");
+        assert_eq!(repo_label("org/lib", &ambiguous), "lib");
+    }
+
+    #[test]
     #[ignore = "muda::Menu requires main thread on macOS"]
     fn build_menu_includes_all_sections() {
         let group = PullRequestGroup {
@@ -402,6 +520,20 @@ mod tests {
             viewer_review_requested: false,
             has_conflicts: false,
         }
+    }
+
+    fn pr_in(repository: &str, n: u32) -> PullRequest {
+        PullRequest {
+            repository: repository.to_string(),
+            ..make_test_pr(n)
+        }
+    }
+
+    fn pr_numbers<'a>(groups: &[(&'a str, Vec<&PullRequest>)]) -> Vec<(&'a str, Vec<u32>)> {
+        groups
+            .iter()
+            .map(|(repo, prs)| (*repo, prs.iter().map(|pr| pr.number).collect()))
+            .collect()
     }
 
     fn pixel(buf: &[u8], x: u32, y: u32) -> [u8; 4] {
