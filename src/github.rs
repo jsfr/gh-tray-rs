@@ -121,7 +121,7 @@ fn parse_response(json: &str, username: &str) -> Result<PullRequestGroup, String
             mine.push(pr);
         } else if assignees.iter().any(|a| a.eq_ignore_ascii_case(username)) {
             assigned.push(pr);
-        } else {
+        } else if !pr.is_draft {
             let has_open_review = matches!(
                 pr.viewer_review_state,
                 Some(ViewerReviewState::Commented | ViewerReviewState::ChangesRequested)
@@ -273,7 +273,7 @@ mod tests {
                             "title": "Review this",
                             "url": "https://github.com/org/repo/pull/2",
                             "number": 2,
-                            "isDraft": true,
+                            "isDraft": false,
                             "repository": { "nameWithOwner": "org/repo" },
                             "author": { "login": "other" },
                             "reviewRequests": { "nodes": [{ "requestedReviewer": { "login": "testuser" } }] },
@@ -326,6 +326,20 @@ mod tests {
                             "mergeable": "MERGEABLE"
                         },
                         {
+                            "title": "Draft review request",
+                            "url": "https://github.com/org/repo/pull/7",
+                            "number": 7,
+                            "isDraft": true,
+                            "repository": { "nameWithOwner": "org/repo" },
+                            "author": { "login": "someone" },
+                            "reviewRequests": { "nodes": [{ "requestedReviewer": { "login": "testuser" } }] },
+                            "assignees": { "nodes": [] },
+                            "reviews": { "nodes": [] },
+                            "viewerLatestReview": { "state": "COMMENTED" },
+                            "commits": { "nodes": [] },
+                            "mergeable": "MERGEABLE"
+                        },
+                        {
                             "title": "Already approved by me",
                             "url": "https://github.com/org/repo/pull/6",
                             "number": 6,
@@ -359,7 +373,7 @@ mod tests {
     }
 
     #[test]
-    fn drops_bystander_and_already_approved_prs() {
+    fn drops_bystander_already_approved_and_draft_review_prs() {
         let group = parse_response(&sample_response(), "testuser").unwrap();
         let titles: Vec<&str> = group
             .mine
@@ -370,6 +384,21 @@ mod tests {
             .collect();
         assert!(!titles.contains(&"Bystander PR"));
         assert!(!titles.contains(&"Already approved by me"));
+        assert!(!titles.contains(&"Draft review request"));
+    }
+
+    #[test]
+    fn keeps_draft_prs_that_are_mine_or_assigned() {
+        let mut node: serde_json::Value =
+            serde_json::from_str(&review_node("testuser", "", "", "")).unwrap();
+        node["isDraft"] = true.into();
+        let group = parse_single(&node.to_string(), "testuser");
+        assert!(group.mine[0].is_draft);
+
+        node["author"]["login"] = "other".into();
+        node["assignees"] = serde_json::json!({ "nodes": [{ "login": "testuser" }] });
+        let group = parse_single(&node.to_string(), "testuser");
+        assert!(group.assigned[0].is_draft);
     }
 
     #[test]
@@ -630,7 +659,6 @@ mod tests {
     fn parses_draft_and_conflicts() {
         let group = parse_response(&sample_response(), "testuser").unwrap();
         assert!(!group.mine[0].is_draft);
-        assert!(group.needs_review[0].is_draft);
         assert!(!group.mine[0].has_conflicts);
         assert!(group.needs_review[0].has_conflicts);
     }
