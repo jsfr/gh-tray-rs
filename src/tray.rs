@@ -26,14 +26,21 @@ pub fn apply_modifier(action: MenuAction, shift_held: bool) -> MenuAction {
 /// emoji keeps the label aligned with rows that have a state.
 const UNKNOWN_STATE: &str = "\u{2753} "; // ❓ Unknown state
 
-/// State marker for My PRs and Assigned: the first match wins.
+/// State marker for My PRs and Assigned: the first match wins. A queued PR
+/// outranks its own check results: the merge queue decides from there.
 pub fn state_marker(pr: &PullRequest) -> &'static str {
-    match (pr.is_draft, pr.has_conflicts, &pr.check_status) {
-        (true, _, _) => "\u{1F6A7} ",                      // 🚧 Draft
-        (_, true, _) => "\u{2694}\u{FE0F} ",               // ⚔️ Conflicts
-        (_, _, Some(CheckStatus::Failure)) => "\u{274C} ", // ❌ Check failure
-        (_, _, Some(CheckStatus::Pending)) => "\u{23F3} ", // ⏳ Check pending
-        (_, _, Some(CheckStatus::Success)) => "\u{2705} ", // ✅ Check success
+    match (
+        pr.is_draft,
+        pr.has_conflicts,
+        pr.in_merge_queue,
+        &pr.check_status,
+    ) {
+        (true, _, _, _) => "\u{1F6A7} ",                      // 🚧 Draft
+        (_, true, _, _) => "\u{2694}\u{FE0F} ",               // ⚔️ Conflicts
+        (_, _, true, _) => "\u{1F682} ",                      // 🚂 Queued to merge
+        (_, _, _, Some(CheckStatus::Failure)) => "\u{274C} ", // ❌ Check failure
+        (_, _, _, Some(CheckStatus::Pending)) => "\u{23F3} ", // ⏳ Check pending
+        (_, _, _, Some(CheckStatus::Success)) => "\u{2705} ", // ✅ Check success
         _ => UNKNOWN_STATE,
     }
 }
@@ -356,6 +363,7 @@ mod tests {
 
     const DRAFT: &str = "\u{1F6A7} ";
     const CONFLICTS: &str = "\u{2694}\u{FE0F} ";
+    const QUEUED: &str = "\u{1F682} ";
     const FAILURE: &str = "\u{274C} ";
     const PENDING: &str = "\u{23F3} ";
     const SUCCESS: &str = "\u{2705} ";
@@ -369,6 +377,7 @@ mod tests {
         let mut pr = make_test_pr(1);
         pr.is_draft = true;
         pr.has_conflicts = true;
+        pr.in_merge_queue = true;
         pr.check_status = Some(CheckStatus::Failure);
         assert_eq!(state_marker(&pr), DRAFT);
 
@@ -376,6 +385,9 @@ mod tests {
         assert_eq!(state_marker(&pr), CONFLICTS);
 
         pr.has_conflicts = false;
+        assert_eq!(state_marker(&pr), QUEUED);
+
+        pr.in_merge_queue = false;
         assert_eq!(state_marker(&pr), FAILURE);
 
         pr.check_status = Some(CheckStatus::Pending);
@@ -519,6 +531,7 @@ mod tests {
             viewer_review_state: None,
             viewer_review_requested: false,
             has_conflicts: false,
+            in_merge_queue: false,
         }
     }
 

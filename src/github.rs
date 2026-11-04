@@ -73,6 +73,7 @@ query($searchQuery: String!) {
           }
         }
         mergeable
+        isInMergeQueue
       }
     }
   }
@@ -156,6 +157,7 @@ fn parse_pull_request(node: &serde_json::Value) -> Option<PullRequest> {
         viewer_review_state: parse_viewer_review_state(node),
         viewer_review_requested: false,
         has_conflicts: node["mergeable"].as_str() == Some("CONFLICTING"),
+        in_merge_queue: node["isInMergeQueue"].as_bool().unwrap_or(false),
     })
 }
 
@@ -661,6 +663,16 @@ mod tests {
         assert!(!group.mine[0].is_draft);
         assert!(!group.mine[0].has_conflicts);
         assert!(group.needs_review[0].has_conflicts);
+    }
+
+    #[test]
+    fn parses_merge_queue_flag() {
+        let mut node: serde_json::Value =
+            serde_json::from_str(&review_node("me", "", "", "")).unwrap();
+        assert!(!parse_single(&node.to_string(), "me").mine[0].in_merge_queue);
+
+        node["isInMergeQueue"] = true.into();
+        assert!(parse_single(&node.to_string(), "me").mine[0].in_merge_queue);
     }
 
     #[test]

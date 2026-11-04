@@ -48,6 +48,15 @@ pub fn demo_pull_requests() -> PullRequestGroup {
                 Some(ReviewStatus::Commented),
                 false,
             ),
+            queued(make_pr(
+                6,
+                "demo/web",
+                "Tidy release notes",
+                false,
+                Some(CheckStatus::Success),
+                Some(ReviewStatus::Approved),
+                false,
+            )),
         ],
         assigned: vec![
             make_pr(
@@ -127,6 +136,7 @@ fn make_pr(
         viewer_review_state: None,
         viewer_review_requested: false,
         has_conflicts,
+        in_merge_queue: false,
     }
 }
 
@@ -140,6 +150,13 @@ fn with_review(pr: PullRequest, state: Option<ViewerReviewState>) -> PullRequest
 fn re_requested(pr: PullRequest) -> PullRequest {
     PullRequest {
         viewer_review_requested: true,
+        ..pr
+    }
+}
+
+fn queued(pr: PullRequest) -> PullRequest {
+    PullRequest {
+        in_merge_queue: true,
         ..pr
     }
 }

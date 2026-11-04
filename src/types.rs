@@ -31,6 +31,7 @@ pub struct PullRequest {
     pub viewer_review_state: Option<ViewerReviewState>,
     pub viewer_review_requested: bool,
     pub has_conflicts: bool,
+    pub in_merge_queue: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -78,6 +79,7 @@ mod tests {
             viewer_review_state: None,
             viewer_review_requested: false,
             has_conflicts: false,
+            in_merge_queue: false,
         }
     }
 }
