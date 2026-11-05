@@ -78,9 +78,9 @@ impl App {
             .lock()
             .map(|mut clicks| clicks.drain(..).collect())
             .unwrap_or_default();
-        for (id, shift_held) in clicks {
+        for (id, command_held) in clicks {
             if let Some(action) = self.menu_actions.get(&id).cloned() {
-                match tray::apply_modifier(action, shift_held) {
+                match tray::apply_modifier(action, command_held) {
                     tray::MenuAction::OpenUrl(url) => {
                         let _ = open::that(&url);
                     }
@@ -231,9 +231,9 @@ fn main() {
     // first menu event initialises to None, and a later registration is
     // silently dropped.
     MenuEvent::set_event_handler(Some(|event: MenuEvent| {
-        let shift_held = modifiers::shift_held();
+        let command_held = modifiers::command_held();
         if let Ok(mut clicks) = MENU_CLICKS.lock() {
-            clicks.push((event.id, shift_held));
+            clicks.push((event.id, command_held));
         }
     }));
 

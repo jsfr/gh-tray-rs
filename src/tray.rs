@@ -13,11 +13,11 @@ pub enum MenuAction {
     Quit,
 }
 
-/// Shift-click on a PR row copies its link instead of opening it. Every other
+/// ⌘-click on a PR row copies its link instead of opening it. Every other
 /// row keeps its action.
-pub fn apply_modifier(action: MenuAction, shift_held: bool) -> MenuAction {
+pub fn apply_modifier(action: MenuAction, command_held: bool) -> MenuAction {
     match action {
-        MenuAction::OpenUrl(url) if shift_held => MenuAction::CopyUrl(url),
+        MenuAction::OpenUrl(url) if command_held => MenuAction::CopyUrl(url),
         other => other,
     }
 }
@@ -274,9 +274,9 @@ pub fn build_menu(
 
     let _ = menu.append(&PredefinedMenuItem::separator());
 
-    // Shift-click is invisible in the menu, so name it
+    // ⌘-click is invisible in the menu, so name it
     if group.total_count() > 0 {
-        let hint_item = MenuItem::new("Hold \u{21E7} and click to copy a link", false, None);
+        let hint_item = MenuItem::new("Hold \u{2318} and click to copy a link", false, None);
         let _ = menu.append(&hint_item);
     }
 
@@ -621,7 +621,7 @@ mod tests {
     }
 
     #[test]
-    fn shift_click_on_a_pr_copies_the_url() {
+    fn command_click_on_a_pr_copies_the_url() {
         let action = MenuAction::OpenUrl("https://example.com/1".to_string());
         assert_eq!(
             apply_modifier(action, true),
@@ -639,12 +639,12 @@ mod tests {
     }
 
     #[test]
-    fn shift_click_on_quit_still_quits() {
+    fn command_click_on_quit_still_quits() {
         assert_eq!(apply_modifier(MenuAction::Quit, true), MenuAction::Quit);
     }
 
     #[test]
-    fn shift_click_on_auto_start_still_toggles() {
+    fn command_click_on_auto_start_still_toggles() {
         assert_eq!(
             apply_modifier(MenuAction::ToggleAutoStart, true),
             MenuAction::ToggleAutoStart
