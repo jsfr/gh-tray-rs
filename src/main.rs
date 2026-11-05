@@ -1,9 +1,12 @@
 mod clipboard;
 mod config;
 mod demo;
+mod dialog;
 mod github;
+mod hidden;
 mod logging;
 mod modifiers;
+mod notify;
 mod theme;
 mod tray;
 mod types;
@@ -12,7 +15,9 @@ use clap::Parser;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, hotkey::HotKey};
 use muda::MenuEvent;
 use objc2::MainThreadMarker;
-use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSEventMask};
+use objc2_app_kit::{
+    NSApplication, NSApplicationActivationPolicy, NSEventMask, NSEventModifierFlags,
+};
 use objc2_foundation::{NSDate, NSDefaultRunLoopMode};
 use std::sync::mpsc;
 use std::time::Duration;
@@ -22,7 +27,8 @@ use tray_icon::TrayIconBuilder;
 const PUMP_TIMEOUT_SECS: f64 = 0.25;
 
 /// Menu clicks, each paired with the modifier state read as the click happened.
-static MENU_CLICKS: std::sync::Mutex<Vec<(muda::MenuId, bool)>> = std::sync::Mutex::new(Vec::new());
+static MENU_CLICKS: std::sync::Mutex<Vec<(muda::MenuId, NSEventModifierFlags)>> =
+    std::sync::Mutex::new(Vec::new());
 
 #[derive(Parser)]
 #[command(name = "gh-tray", about = "GitHub PR monitor in your system tray")]
@@ -41,7 +47,12 @@ enum PollMessage {
 struct App {
     tray_icon: Option<tray_icon::TrayIcon>,
     menu_actions: std::collections::HashMap<muda::MenuId, tray::MenuAction>,
+    /// The last poll result, hidden PRs included.
     last_group: types::PullRequestGroup,
+    hidden: hidden::Hidden,
+    /// Where hidden PRs are saved. `None` in demo mode, whose fake PRs would
+    /// otherwise make the next poll forget the real ones.
+    hidden_path: Option<std::path::PathBuf>,
     rx: mpsc::Receiver<PollMessage>,
     auto_launch: Option<auto_launch::AutoLaunch>,
     auto_start_enabled: bool,
@@ -74,18 +85,27 @@ impl App {
     /// poll results.
     fn drain(&mut self) {
         // Process menu events
-        let clicks: Vec<(muda::MenuId, bool)> = MENU_CLICKS
+        let clicks: Vec<(muda::MenuId, NSEventModifierFlags)> = MENU_CLICKS
             .lock()
             .map(|mut clicks| clicks.drain(..).collect())
             .unwrap_or_default();
-        for (id, command_held) in clicks {
+        for (id, held) in clicks {
             if let Some(action) = self.menu_actions.get(&id).cloned() {
-                match tray::apply_modifier(action, command_held) {
-                    tray::MenuAction::OpenUrl(url) => {
+                match tray::apply_modifier(action, held) {
+                    tray::MenuAction::OpenUrl(url)
+                    | tray::MenuAction::OpenReview(url)
+                    | tray::MenuAction::OpenHidden(url) => {
                         let _ = open::that(&url);
                     }
                     tray::MenuAction::CopyUrl(url) => {
                         clipboard::copy(&url);
+                    }
+                    tray::MenuAction::Hide(url) => self.hide(&url),
+                    tray::MenuAction::Unhide(url) => {
+                        if self.hidden.remove(&url).is_some() {
+                            self.save_hidden();
+                            self.refresh();
+                        }
                     }
                     tray::MenuAction::ToggleAutoStart => {
                         if let Some(al) = &self.auto_launch {
@@ -116,19 +136,23 @@ impl App {
                     let now = local_time_now();
                     self.last_updated = Some(now);
                     self.is_stale = false;
-                    self.last_group = group;
 
-                    let count = self.last_group.total_count();
-                    let is_dark = theme::is_dark_theme();
-                    let icon = tray::render_icon(&count.to_string(), is_dark);
-
-                    if let Some(tray) = &self.tray_icon {
-                        let _ = tray.set_icon(Some(icon));
-                        let _ = tray.set_tooltip(Some(&format!("gh-tray: {count} PRs")));
-                        tracing::debug!("Tray updated: {count} PRs");
+                    let before = self.hidden.clone();
+                    let released = hidden::release(&group, &mut self.hidden);
+                    if self.hidden != before {
+                        self.save_hidden();
+                    }
+                    for (pr, conditions) in &released {
+                        tracing::info!("Unhid {} after its conditions were met", pr.url);
+                        notify::send(
+                            &pr.url,
+                            "Ready for review",
+                            &hidden::release_message(pr, conditions),
+                        );
                     }
 
-                    self.rebuild_menu();
+                    self.last_group = group;
+                    self.refresh();
                 }
                 PollMessage::Stale => {
                     self.is_stale = true;
@@ -138,9 +162,54 @@ impl App {
         }
     }
 
+    /// Ask which conditions a Review PR should wait for, then hide it.
+    fn hide(&mut self, url: &str) {
+        let Some(pr) = self.last_group.needs_review.iter().find(|pr| pr.url == url) else {
+            return;
+        };
+        let options: Vec<types::HideCondition> = types::HideCondition::ALL
+            .into_iter()
+            .filter(|condition| !condition.is_met(pr))
+            .collect();
+        let subject = format!("#{} {}", pr.number, pr.title);
+        let Some(conditions) = dialog::choose_conditions(&subject, &options) else {
+            return;
+        };
+
+        tracing::info!("Hid {url} until {conditions:?}");
+        self.hidden.insert(url.to_string(), conditions);
+        self.save_hidden();
+        // Ask now, while the user knows why gh-tray wants to notify
+        notify::request_permission();
+        self.refresh();
+    }
+
+    fn save_hidden(&self) {
+        if let Some(path) = &self.hidden_path {
+            hidden::save(path, &self.hidden);
+        }
+    }
+
+    /// The group the menu and icon show: the last poll without hidden PRs.
+    fn visible_group(&self) -> types::PullRequestGroup {
+        hidden::split(self.last_group.clone(), &self.hidden)
+    }
+
+    /// Redraw the icon count and the menu.
+    fn refresh(&mut self) {
+        let count = self.visible_group().total_count();
+        let icon = tray::render_icon(&count.to_string(), theme::is_dark_theme());
+        if let Some(tray) = &self.tray_icon {
+            let _ = tray.set_icon(Some(icon));
+            let _ = tray.set_tooltip(Some(&format!("gh-tray: {count} PRs")));
+            tracing::debug!("Tray updated: {count} PRs");
+        }
+        self.rebuild_menu();
+    }
+
     fn rebuild_menu(&mut self) {
         let (menu, actions) = tray::build_menu(
-            &self.last_group,
+            &self.visible_group(),
             self.is_stale,
             self.last_updated.as_deref(),
             self.auto_start_enabled,
@@ -231,9 +300,9 @@ fn main() {
     // first menu event initialises to None, and a later registration is
     // silently dropped.
     MenuEvent::set_event_handler(Some(|event: MenuEvent| {
-        let command_held = modifiers::command_held();
+        let held = modifiers::held();
         if let Ok(mut clicks) = MENU_CLICKS.lock() {
-            clicks.push((event.id, command_held));
+            clicks.push((event.id, held));
         }
     }));
 
@@ -351,10 +420,13 @@ fn main() {
             })
     });
 
+    let hidden_path = (!cli.demo).then(hidden::path);
     let mut app = App {
         tray_icon: None, // Created below, once NSApp is ready
         menu_actions: std::collections::HashMap::new(),
         last_group: types::PullRequestGroup::default(),
+        hidden: hidden_path.as_deref().map(hidden::load).unwrap_or_default(),
+        hidden_path,
         rx,
         auto_launch,
         auto_start_enabled,

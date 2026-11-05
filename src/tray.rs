@@ -1,6 +1,6 @@
 use crate::types::*;
-use muda::{ContextMenu, Menu, MenuId, MenuItem, PredefinedMenuItem};
-use objc2_app_kit::NSMenu;
+use muda::{ContextMenu, IsMenuItem, Menu, MenuId, MenuItem, PredefinedMenuItem, Submenu};
+use objc2_app_kit::{NSEventModifierFlags, NSMenu};
 use std::collections::{HashMap, HashSet};
 use tray_icon::Icon;
 
@@ -8,16 +8,38 @@ use tray_icon::Icon;
 #[derive(Debug, Clone, PartialEq)]
 pub enum MenuAction {
     OpenUrl(String),
+    /// A Review row: opens like `OpenUrl`, and ⌃-click hides it.
+    OpenReview(String),
+    /// A row in the Hidden submenu: opens like `OpenUrl`, and ⌃-click unhides it.
+    OpenHidden(String),
     CopyUrl(String),
+    /// Ask which conditions the Review PR should wait for, then hide it.
+    Hide(String),
+    /// Put a hidden PR back in the Review group.
+    Unhide(String),
     ToggleAutoStart,
     Quit,
 }
 
-/// ⌘-click on a PR row copies its link instead of opening it. Every other
-/// row keeps its action.
-pub fn apply_modifier(action: MenuAction, command_held: bool) -> MenuAction {
+/// ⌘-click on a PR row copies its link instead of opening it. ⌃-click on a
+/// Review row hides it, and on a hidden row unhides it. Every other row keeps
+/// its action.
+///
+/// Neither is Option, the usual macOS modifier for an alternate menu action:
+/// tiling window managers claim Option-click for themselves, and the click then
+/// never reaches the menu. Shift is not used either, because Shift-clicks did
+/// not always register.
+pub fn apply_modifier(action: MenuAction, held: NSEventModifierFlags) -> MenuAction {
+    let command = held.contains(NSEventModifierFlags::Command);
+    let control = held.contains(NSEventModifierFlags::Control);
     match action {
-        MenuAction::OpenUrl(url) if command_held => MenuAction::CopyUrl(url),
+        MenuAction::OpenUrl(url) | MenuAction::OpenReview(url) | MenuAction::OpenHidden(url)
+            if command =>
+        {
+            MenuAction::CopyUrl(url)
+        }
+        MenuAction::OpenReview(url) if control => MenuAction::Hide(url),
+        MenuAction::OpenHidden(url) if control => MenuAction::Unhide(url),
         other => other,
     }
 }
@@ -85,14 +107,15 @@ fn repo_name(name_with_owner: &str) -> &str {
         .map_or(name_with_owner, |(_, name)| name)
 }
 
-/// Group PRs by "owner/repo". Repos keep the order of their first PR, and PRs
-/// keep their order within a repo.
-fn group_by_repo(prs: &[PullRequest]) -> Vec<(&str, Vec<&PullRequest>)> {
-    let mut groups: Vec<(&str, Vec<&PullRequest>)> = Vec::new();
-    for pr in prs {
-        match groups.iter_mut().find(|(repo, _)| *repo == pr.repository) {
-            Some((_, members)) => members.push(pr),
-            None => groups.push((&pr.repository, vec![pr])),
+/// Group items by their PR's "owner/repo". Repos keep the order of their first
+/// item, and items keep their order within a repo.
+fn group_by_repo<T>(items: &[T], pr_of: impl Fn(&T) -> &PullRequest) -> Vec<(&str, Vec<&T>)> {
+    let mut groups: Vec<(&str, Vec<&T>)> = Vec::new();
+    for item in items {
+        let repo = pr_of(item).repository.as_str();
+        match groups.iter_mut().find(|(r, _)| *r == repo) {
+            Some((_, members)) => members.push(item),
+            None => groups.push((repo, vec![item])),
         }
     }
     groups
@@ -106,6 +129,7 @@ fn ambiguous_repo_names(group: &PullRequestGroup) -> HashSet<&str> {
         .iter()
         .chain(&group.assigned)
         .chain(&group.needs_review)
+        .chain(group.hidden.iter().map(|(pr, _)| pr))
     {
         owners
             .entry(repo_name(&pr.repository))
@@ -253,6 +277,7 @@ pub fn build_menu(
         "My PRs",
         &group.mine,
         status_prefix,
+        MenuAction::OpenUrl,
         &ambiguous,
     );
     add_section(
@@ -261,6 +286,7 @@ pub fn build_menu(
         "Assigned",
         &group.assigned,
         status_prefix,
+        MenuAction::OpenUrl,
         &ambiguous,
     );
     add_section(
@@ -269,14 +295,21 @@ pub fn build_menu(
         "Review",
         &group.needs_review,
         review_prefix,
+        MenuAction::OpenReview,
         &ambiguous,
     );
+    add_hidden(&menu, &mut actions, group, &ambiguous);
 
     let _ = menu.append(&PredefinedMenuItem::separator());
 
-    // ⌘-click is invisible in the menu, so name it
-    if group.total_count() > 0 {
-        let hint_item = MenuItem::new("Hold \u{2318} and click to copy a link", false, None);
+    // Modifier clicks are invisible in the menu, so name them
+    if group.total_count() > 0 || !group.hidden.is_empty() {
+        let hint = if group.needs_review.is_empty() && group.hidden.is_empty() {
+            "\u{2318}-click copies a link"
+        } else {
+            "\u{2318}-click copies a link, \u{2303}-click hides or unhides a review"
+        };
+        let hint_item = MenuItem::new(hint, false, None);
         let _ = menu.append(&hint_item);
     }
 
@@ -319,35 +352,112 @@ fn add_section(
     header: &str,
     prs: &[PullRequest],
     prefix_fn: fn(&PullRequest) -> String,
+    action_fn: fn(String) -> MenuAction,
     ambiguous: &HashSet<&str>,
 ) {
     if prs.is_empty() {
         return;
     }
 
-    // Section header (disabled menu item, acts as label)
-    let header_item = MenuItem::new(header, false, None);
-    let _ = menu.append(&header_item);
-    let _ = menu.append(&PredefinedMenuItem::separator());
+    append_header(menu, header);
+    let rows: Vec<Row> = prs
+        .iter()
+        .map(|pr| {
+            let label = format!("{}#{} {}", prefix_fn(pr), pr.number, pr.title);
+            (pr, label, action_fn(pr.url.clone()))
+        })
+        .collect();
+    append_by_repo(menu, actions, &rows, ambiguous);
+}
 
-    for (repo, repo_prs) in group_by_repo(prs) {
+/// A PR row: the PR, its label and its action.
+type Row<'a> = (&'a PullRequest, String, MenuAction);
+
+/// The top-level menu and submenus both take rows.
+trait Rows: ContextMenu {
+    fn push(&self, item: &dyn IsMenuItem);
+}
+
+impl Rows for Menu {
+    fn push(&self, item: &dyn IsMenuItem) {
+        let _ = self.append(item);
+    }
+}
+
+impl Rows for Submenu {
+    fn push(&self, item: &dyn IsMenuItem) {
+        let _ = self.append(item);
+    }
+}
+
+/// Append rows grouped under a header per repo, one indentation level in.
+fn append_by_repo(
+    menu: &impl Rows,
+    actions: &mut HashMap<MenuId, MenuAction>,
+    rows: &[Row],
+    ambiguous: &HashSet<&str>,
+) {
+    for (repo, repo_rows) in group_by_repo(rows, |row| row.0) {
         // Repo header (disabled menu item, acts as label)
-        let repo_item = MenuItem::new(repo_label(repo, ambiguous), false, None);
-        let _ = menu.append(&repo_item);
+        menu.push(&MenuItem::new(repo_label(repo, ambiguous), false, None));
 
-        for pr in repo_prs {
-            let prefix = prefix_fn(pr);
-            let label = format!("{prefix}#{} {}", pr.number, pr.title);
-            let item = MenuItem::new(&label, true, None);
-            actions.insert(item.id().clone(), MenuAction::OpenUrl(pr.url.clone()));
+        for (_, label, action) in repo_rows {
+            let item = MenuItem::new(label, true, None);
+            actions.insert(item.id().clone(), action.clone());
             append_indented(menu, &item);
         }
     }
 }
 
+/// Section header: a disabled item that acts as a label, then a separator.
+fn append_header(menu: &Menu, header: &str) {
+    let _ = menu.append(&MenuItem::new(header, false, None));
+    let _ = menu.append(&PredefinedMenuItem::separator());
+}
+
+/// The "Hidden (N)" submenu at the end of the Review section, grouped by repo
+/// like the main sections.
+fn add_hidden(
+    menu: &Menu,
+    actions: &mut HashMap<MenuId, MenuAction>,
+    group: &PullRequestGroup,
+    ambiguous: &HashSet<&str>,
+) {
+    if group.hidden.is_empty() {
+        return;
+    }
+    if group.needs_review.is_empty() {
+        append_header(menu, "Review");
+    }
+
+    let submenu = Submenu::new(format!("Hidden ({})", group.hidden.len()), true);
+    let rows: Vec<Row> = group
+        .hidden
+        .iter()
+        .map(|(pr, conditions)| {
+            let action = MenuAction::OpenHidden(pr.url.clone());
+            (pr, hidden_label(pr, conditions), action)
+        })
+        .collect();
+    append_by_repo(&submenu, actions, &rows, ambiguous);
+    let _ = menu.append(&submenu);
+}
+
+/// A hidden PR's row: a Review row plus what it waits for.
+fn hidden_label(pr: &PullRequest, conditions: &[HideCondition]) -> String {
+    let waiting: Vec<&str> = conditions.iter().map(|c| c.short_label()).collect();
+    format!(
+        "{}#{} {} (waiting for {})",
+        review_prefix(pr),
+        pr.number,
+        pr.title,
+        waiting.join(", ")
+    )
+}
+
 /// Append an item one indentation level in, under its repo header.
-fn append_indented(menu: &Menu, item: &MenuItem) {
-    let _ = menu.append(item);
+fn append_indented(menu: &impl Rows, item: &MenuItem) {
+    menu.push(item);
 
     // muda has no indentation API, so set it on the NSMenuItem it just added
     // SAFETY: `ns_menu` points to the NSMenu that `menu` owns and keeps alive.
@@ -457,7 +567,7 @@ mod tests {
             pr_in("org/app", 3),
         ];
         assert_eq!(
-            pr_numbers(&group_by_repo(&prs)),
+            pr_numbers(&group_by_repo(&prs, |pr| pr)),
             [("org/app", vec![1, 3]), ("org/api", vec![2])]
         );
     }
@@ -466,14 +576,15 @@ mod tests {
     fn group_by_repo_keeps_owners_apart() {
         let prs = [pr_in("one/app", 1), pr_in("two/app", 2)];
         assert_eq!(
-            pr_numbers(&group_by_repo(&prs)),
+            pr_numbers(&group_by_repo(&prs, |pr| pr)),
             [("one/app", vec![1]), ("two/app", vec![2])]
         );
     }
 
     #[test]
     fn group_by_repo_of_no_prs_is_empty() {
-        assert!(group_by_repo(&[]).is_empty());
+        let prs: [PullRequest; 0] = [];
+        assert!(group_by_repo(&prs, |pr| pr).is_empty());
     }
 
     #[test]
@@ -482,6 +593,7 @@ mod tests {
             mine: vec![pr_in("one/app", 1), pr_in("org/lib", 2)],
             assigned: vec![],
             needs_review: vec![pr_in("two/app", 3), pr_in("org/lib", 4)],
+            hidden: vec![],
         };
         assert_eq!(ambiguous_repo_names(&group), HashSet::from(["app"]));
     }
@@ -500,6 +612,7 @@ mod tests {
             mine: vec![make_test_pr(1)],
             assigned: vec![make_test_pr(4)],
             needs_review: vec![make_test_pr(2), make_test_pr(3)],
+            hidden: vec![],
         };
         let (_, actions) = build_menu(&group, false, Some("12:00:00"), false);
         // 4 PR items + auto-start + quit = 6 actions
@@ -513,6 +626,7 @@ mod tests {
             mine: vec![make_test_pr(1)],
             assigned: vec![],
             needs_review: vec![],
+            hidden: vec![],
         };
         let (_, actions) = build_menu(&group, false, Some("12:00:00"), false);
         // 1 PR item + auto-start + quit = 3 actions
@@ -531,7 +645,9 @@ mod tests {
             viewer_review_state: None,
             viewer_review_requested: false,
             has_conflicts: false,
+            is_mergeable: false,
             in_merge_queue: false,
+            approved_by_other: false,
         }
     }
 
@@ -620,34 +736,73 @@ mod tests {
         assert_ne!(render_icon_rgba("8", true), render_icon_rgba("8", false));
     }
 
+    const URL: &str = "https://example.com/1";
+    const NONE: NSEventModifierFlags = NSEventModifierFlags::empty();
+    const COMMAND: NSEventModifierFlags = NSEventModifierFlags::Command;
+    const CONTROL: NSEventModifierFlags = NSEventModifierFlags::Control;
+
+    fn open(url: &str) -> MenuAction {
+        MenuAction::OpenUrl(url.to_string())
+    }
+
+    fn open_review(url: &str) -> MenuAction {
+        MenuAction::OpenReview(url.to_string())
+    }
+
     #[test]
     fn command_click_on_a_pr_copies_the_url() {
-        let action = MenuAction::OpenUrl("https://example.com/1".to_string());
-        assert_eq!(
-            apply_modifier(action, true),
-            MenuAction::CopyUrl("https://example.com/1".to_string())
-        );
+        let copy = MenuAction::CopyUrl(URL.to_string());
+        assert_eq!(apply_modifier(open(URL), COMMAND), copy);
+        assert_eq!(apply_modifier(open_review(URL), COMMAND), copy);
     }
 
     #[test]
     fn plain_click_on_a_pr_opens_the_url() {
-        let action = MenuAction::OpenUrl("https://example.com/1".to_string());
+        assert_eq!(apply_modifier(open(URL), NONE), open(URL));
+        assert_eq!(apply_modifier(open_review(URL), NONE), open_review(URL));
+    }
+
+    #[test]
+    fn control_click_hides_only_review_prs() {
         assert_eq!(
-            apply_modifier(action, false),
-            MenuAction::OpenUrl("https://example.com/1".to_string())
+            apply_modifier(open_review(URL), CONTROL),
+            MenuAction::Hide(URL.to_string())
+        );
+        assert_eq!(apply_modifier(open(URL), CONTROL), open(URL));
+    }
+
+    #[test]
+    fn hidden_rows_open_copy_and_unhide() {
+        let hidden = MenuAction::OpenHidden(URL.to_string());
+        assert_eq!(apply_modifier(hidden.clone(), NONE), hidden);
+        assert_eq!(
+            apply_modifier(hidden.clone(), COMMAND),
+            MenuAction::CopyUrl(URL.to_string())
+        );
+        assert_eq!(
+            apply_modifier(hidden, CONTROL),
+            MenuAction::Unhide(URL.to_string())
         );
     }
 
     #[test]
-    fn command_click_on_quit_still_quits() {
-        assert_eq!(apply_modifier(MenuAction::Quit, true), MenuAction::Quit);
+    fn modifier_clicks_on_other_rows_keep_their_action() {
+        for held in [COMMAND, CONTROL] {
+            assert_eq!(apply_modifier(MenuAction::Quit, held), MenuAction::Quit);
+            assert_eq!(
+                apply_modifier(MenuAction::ToggleAutoStart, held),
+                MenuAction::ToggleAutoStart
+            );
+        }
     }
 
     #[test]
-    fn command_click_on_auto_start_still_toggles() {
+    fn hidden_label_says_what_the_pr_waits_for() {
+        let pr = make_test_pr(7);
+        let conditions = [HideCondition::ApprovedByOther, HideCondition::ChecksGreen];
         assert_eq!(
-            apply_modifier(MenuAction::ToggleAutoStart, true),
-            MenuAction::ToggleAutoStart
+            hidden_label(&pr, &conditions),
+            format!("{EYES}#7 PR 7 (waiting for approval, green CI)")
         );
     }
 

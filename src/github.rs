@@ -64,6 +64,9 @@ query($searchQuery: String!) {
         commentedReviews: reviews(last: 20, states: [COMMENTED]) {
           nodes { author { __typename login } }
         }
+        latestOpinionatedReviews(first: 20) {
+          nodes { state author { __typename login } }
+        }
         viewerLatestReview { state }
         commits(last: 1) {
           nodes {
@@ -117,6 +120,7 @@ fn parse_response(json: &str, username: &str) -> Result<PullRequestGroup, String
         let assignees = parse_assignee_logins(node);
         let is_requested = reviewers.iter().any(|r| r.eq_ignore_ascii_case(username));
         pr.viewer_review_requested = is_requested;
+        pr.approved_by_other = parse_approved_by_other(node, username);
 
         if author.eq_ignore_ascii_case(username) {
             mine.push(pr);
@@ -137,6 +141,7 @@ fn parse_response(json: &str, username: &str) -> Result<PullRequestGroup, String
         mine,
         assigned,
         needs_review,
+        hidden: Vec::new(),
     })
 }
 
@@ -157,7 +162,9 @@ fn parse_pull_request(node: &serde_json::Value) -> Option<PullRequest> {
         viewer_review_state: parse_viewer_review_state(node),
         viewer_review_requested: false,
         has_conflicts: node["mergeable"].as_str() == Some("CONFLICTING"),
+        is_mergeable: node["mergeable"].as_str() == Some("MERGEABLE"),
         in_merge_queue: node["isInMergeQueue"].as_bool().unwrap_or(false),
+        approved_by_other: false,
     })
 }
 
@@ -222,6 +229,23 @@ fn parse_review_status(node: &serde_json::Value) -> Option<ReviewStatus> {
         .any(|login| !login.eq_ignore_ascii_case(author));
 
     has_comment_review.then_some(ReviewStatus::Commented)
+}
+
+/// True when anyone but the viewer approved in their latest approval or change
+/// request. `latestOpinionatedReviews` holds one such review per reviewer and
+/// skips comment reviews, so a later comment does not hide an approval. Bot
+/// approvals do not count.
+fn parse_approved_by_other(node: &serde_json::Value, username: &str) -> bool {
+    node["latestOpinionatedReviews"]["nodes"]
+        .as_array()
+        .is_some_and(|reviews| {
+            reviews.iter().any(|review| {
+                let author = review["author"]["login"].as_str().unwrap_or("");
+                review["state"].as_str() == Some("APPROVED")
+                    && !is_bot(review)
+                    && !author.eq_ignore_ascii_case(username)
+            })
+        })
 }
 
 fn parse_reviewer_logins(node: &serde_json::Value) -> Vec<String> {
@@ -663,6 +687,49 @@ mod tests {
         assert!(!group.mine[0].is_draft);
         assert!(!group.mine[0].has_conflicts);
         assert!(group.needs_review[0].has_conflicts);
+    }
+
+    #[test]
+    fn only_a_known_mergeable_state_is_mergeable() {
+        let mut node: serde_json::Value =
+            serde_json::from_str(&review_node("me", "", "", "")).unwrap();
+        assert!(parse_single(&node.to_string(), "me").mine[0].is_mergeable);
+
+        for state in ["UNKNOWN", "CONFLICTING"] {
+            node["mergeable"] = state.into();
+            assert!(!parse_single(&node.to_string(), "me").mine[0].is_mergeable);
+        }
+    }
+
+    #[test]
+    fn approval_counts_only_from_someone_else() {
+        let approved_by_other = |reviews: &str| {
+            let mut node: serde_json::Value =
+                serde_json::from_str(&review_node("other", "", "", "")).unwrap();
+            node["latestOpinionatedReviews"] =
+                serde_json::from_str(&format!(r#"{{ "nodes": [{reviews}] }}"#)).unwrap();
+            parse_single(&node.to_string(), "me").needs_review[0].approved_by_other
+        };
+        let review = |login: &str, typename: &str, state: &str| {
+            format!(
+                r#"{{ "state": "{state}", "author": {{ "__typename": "{typename}", "login": "{login}" }} }}"#
+            )
+        };
+
+        assert!(!approved_by_other(""));
+        assert!(!approved_by_other(&review("Me", "User", "APPROVED")));
+        assert!(!approved_by_other(&review("ci", "Bot", "APPROVED")));
+        assert!(!approved_by_other(&review(
+            "reviewer",
+            "User",
+            "CHANGES_REQUESTED"
+        )));
+        assert!(approved_by_other(&review("reviewer", "User", "APPROVED")));
+        assert!(approved_by_other(&format!(
+            "{}, {}",
+            review("me", "User", "APPROVED"),
+            review("reviewer", "User", "APPROVED")
+        )));
     }
 
     #[test]

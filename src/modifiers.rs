@@ -1,16 +1,11 @@
 use objc2_app_kit::{NSEvent, NSEventModifierFlags};
 
-/// True while the Command key is held down.
+/// The modifier keys held down right now.
 ///
 /// Reads the current modifier state instead of an event's, so it is only
 /// correct when called as the click is handled.
-///
-/// Command rather than Option, which is the usual macOS modifier for an
-/// alternate menu action: tiling window managers claim Option-click for
-/// themselves, and the click then never reaches the menu. Shift is not used
-/// either, because Shift-clicks did not always register.
-pub fn command_held() -> bool {
-    NSEvent::modifierFlags_class().contains(NSEventModifierFlags::Command)
+pub fn held() -> NSEventModifierFlags {
+    NSEvent::modifierFlags_class()
 }
 
 #[cfg(test)]
@@ -18,7 +13,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn command_held_is_false_when_no_key_is_down() {
-        assert!(!command_held());
+    fn no_modifier_is_held_when_no_key_is_down() {
+        assert!(!held().intersects(NSEventModifierFlags::Command | NSEventModifierFlags::Control));
     }
 }

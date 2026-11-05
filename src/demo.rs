@@ -113,6 +113,7 @@ pub fn demo_pull_requests() -> PullRequestGroup {
                 false,
             ),
         ],
+        hidden: Vec::new(),
     }
 }
 
@@ -136,7 +137,9 @@ fn make_pr(
         viewer_review_state: None,
         viewer_review_requested: false,
         has_conflicts,
+        is_mergeable: !has_conflicts,
         in_merge_queue: false,
+        approved_by_other: false,
     }
 }
 

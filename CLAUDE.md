@@ -41,6 +41,9 @@ image-processing dependency either.
 - `src/github.rs` — gh CLI wrapper + GraphQL
 - `src/demo.rs` — demo mode
 - `src/tray.rs` — tray icon + menu building
+- `src/hidden.rs` – hidden Review PRs: saving, release and split
+- `src/dialog.rs` – the dialog that asks what a hidden PR waits for
+- `src/notify.rs` – system notifications
 - `src/theme.rs` — dark/light mode detection
 - `src/clipboard.rs` — clipboard writes
 - `src/modifiers.rs` — modifier key state
