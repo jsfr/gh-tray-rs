@@ -1,5 +1,12 @@
 use crate::types::*;
-use std::process::Command;
+use std::io::Read;
+use std::process::{Command, Output, Stdio};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
+
+/// Longest a `gh` call may run. A request that never returns would otherwise
+/// block the polling thread, and the menu would stop updating with no warning.
+const GH_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Run `gh` CLI with given args and optional token.
 pub fn run_gh(token: Option<&str>, args: &[&str]) -> Result<String, String> {
@@ -10,9 +17,7 @@ pub fn run_gh(token: Option<&str>, args: &[&str]) -> Result<String, String> {
         cmd.env("GH_TOKEN", t);
     }
 
-    let output = cmd
-        .output()
-        .map_err(|e| format!("Failed to start gh: {e}"))?;
+    let output = output_with_timeout(cmd, GH_TIMEOUT)?;
 
     if output.status.success() {
         String::from_utf8(output.stdout)
@@ -22,6 +27,53 @@ pub fn run_gh(token: Option<&str>, args: &[&str]) -> Result<String, String> {
         let stderr = String::from_utf8_lossy(&output.stderr);
         Err(stderr.trim().to_string())
     }
+}
+
+/// Run `cmd` like `Command::output`, but kill it once it runs past `timeout`.
+fn output_with_timeout(mut cmd: Command, timeout: Duration) -> Result<Output, String> {
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to start gh: {e}"))?;
+
+    // Drain both pipes while waiting: a child that fills a pipe buffer never exits.
+    let stdout = read_to_end_in_background(child.stdout.take());
+    let stderr = read_to_end_in_background(child.stderr.take());
+
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("gh did not finish within {}s", timeout.as_secs()));
+            }
+            Err(e) => {
+                let _ = child.kill();
+                return Err(format!("Failed to wait for gh: {e}"));
+            }
+        }
+    };
+
+    Ok(Output {
+        status,
+        stdout: stdout.join().unwrap_or_default(),
+        stderr: stderr.join().unwrap_or_default(),
+    })
+}
+
+fn read_to_end_in_background(pipe: Option<impl Read + Send + 'static>) -> JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut pipe) = pipe {
+            let _ = pipe.read_to_end(&mut buf);
+        }
+        buf
+    })
 }
 
 pub fn validate_auth(token: Option<&str>) -> Result<(), String> {
@@ -275,6 +327,30 @@ fn parse_assignee_logins(node: &serde_json::Value) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn output_with_timeout_kills_a_command_that_runs_too_long() {
+        let started = Instant::now();
+        let mut cmd = Command::new("sleep");
+        cmd.arg("10");
+
+        let err = output_with_timeout(cmd, Duration::from_millis(200)).unwrap_err();
+
+        assert!(err.contains("did not finish"), "unexpected error: {err}");
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn output_with_timeout_collects_output_larger_than_a_pipe_buffer() {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "head -c 200000 /dev/zero; echo failed >&2; exit 3"]);
+
+        let output = output_with_timeout(cmd, Duration::from_secs(10)).unwrap();
+
+        assert_eq!(output.stdout.len(), 200_000);
+        assert_eq!(output.stderr, b"failed\n");
+        assert_eq!(output.status.code(), Some(3));
+    }
 
     fn sample_response() -> String {
         r#"{

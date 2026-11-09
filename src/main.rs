@@ -375,11 +375,14 @@ fn main() {
             }
         }
 
-        let username = match github::get_username(token_clone.as_deref()) {
-            Ok(u) => u,
-            Err(e) => {
-                tracing::error!("Failed to get username: {e}");
-                return;
+        let username = loop {
+            match github::get_username(token_clone.as_deref()) {
+                Ok(u) => break u,
+                Err(e) => {
+                    tracing::error!("Failed to get username: {e}");
+                    let _ = tx.send(PollMessage::Stale);
+                    std::thread::sleep(poll_interval);
+                }
             }
         };
 
