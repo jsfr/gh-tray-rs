@@ -1,6 +1,7 @@
 use crate::types::*;
 use muda::{ContextMenu, IsMenuItem, Menu, MenuId, MenuItem, PredefinedMenuItem, Submenu};
 use objc2_app_kit::{NSEventModifierFlags, NSMenu};
+use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 use tray_icon::Icon;
 
@@ -107,11 +108,23 @@ fn repo_name(name_with_owner: &str) -> &str {
         .map_or(name_with_owner, |(_, name)| name)
 }
 
-/// Group items by their PR's "owner/repo". Repos keep the order of their first
-/// item, and items keep their order within a repo.
+/// Group items by their PR's "owner/repo". Repos are sorted by name, then
+/// owner, and items within a repo by PR number, highest first. The order does
+/// not depend on the order of `items`, so the menu does not shuffle when a PR
+/// is updated.
 fn group_by_repo<T>(items: &[T], pr_of: impl Fn(&T) -> &PullRequest) -> Vec<(&str, Vec<&T>)> {
+    let mut sorted: Vec<&T> = items.iter().collect();
+    sorted.sort_by_cached_key(|item| {
+        let pr = pr_of(item);
+        (
+            repo_name(&pr.repository).to_lowercase(),
+            pr.repository.clone(),
+            Reverse(pr.number),
+        )
+    });
+
     let mut groups: Vec<(&str, Vec<&T>)> = Vec::new();
-    for item in items {
+    for item in sorted {
         let repo = pr_of(item).repository.as_str();
         match groups.iter_mut().find(|(r, _)| *r == repo) {
             Some((_, members)) => members.push(item),
@@ -560,21 +573,27 @@ mod tests {
     }
 
     #[test]
-    fn group_by_repo_orders_repos_by_their_first_pr() {
+    fn group_by_repo_sorts_repos_by_name_and_prs_newest_first() {
         let prs = [
             pr_in("org/app", 1),
             pr_in("org/api", 2),
             pr_in("org/app", 3),
+            pr_in("org/Zed", 4),
         ];
-        assert_eq!(
-            pr_numbers(&group_by_repo(&prs, |pr| pr)),
-            [("org/app", vec![1, 3]), ("org/api", vec![2])]
-        );
+        let expected = [
+            ("org/api", vec![2]),
+            ("org/app", vec![3, 1]),
+            ("org/Zed", vec![4]),
+        ];
+        assert_eq!(pr_numbers(&group_by_repo(&prs, |pr| pr)), expected);
+
+        let reversed: Vec<_> = prs.iter().rev().cloned().collect();
+        assert_eq!(pr_numbers(&group_by_repo(&reversed, |pr| pr)), expected);
     }
 
     #[test]
     fn group_by_repo_keeps_owners_apart() {
-        let prs = [pr_in("one/app", 1), pr_in("two/app", 2)];
+        let prs = [pr_in("two/app", 2), pr_in("one/app", 1)];
         assert_eq!(
             pr_numbers(&group_by_repo(&prs, |pr| pr)),
             [("one/app", vec![1]), ("two/app", vec![2])]
