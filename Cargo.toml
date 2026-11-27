@@ -1,6 +1,6 @@
 [package]
 name = "gh-tray"
-version = "0.0.20"
+version = "0.0.21"
 edition = "2024"
 description = "macOS menu bar app monitoring GitHub PRs"
 
