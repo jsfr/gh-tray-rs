@@ -110,7 +110,9 @@ mod tests {
             has_conflicts: false,
             is_mergeable: false,
             in_merge_queue: false,
+            auto_merge_enabled: false,
             approved_by_other: false,
+            stack: None,
         }
     }
 

@@ -84,6 +84,16 @@ pub fn status_prefix(pr: &PullRequest) -> String {
     format!("{}{}", state_marker(pr), review_marker(pr))
 }
 
+/// The PR title with its tags in front: `[5/7] ` for its place in a PR stack,
+/// then `[A] ` when auto-merge is enabled.
+fn display_title(pr: &PullRequest) -> String {
+    let stack = pr.stack.map_or(String::new(), |(position, size)| {
+        format!("[{position}/{size}] ")
+    });
+    let auto_merge = if pr.auto_merge_enabled { "[A] " } else { "" };
+    format!("{stack}{auto_merge}{}", pr.title)
+}
+
 /// Prefix for the Review group. An open review request for the viewer, such
 /// as a re-request after changes were requested, overrides the viewer's
 /// latest review.
@@ -376,7 +386,7 @@ fn add_section(
     let rows: Vec<Row> = prs
         .iter()
         .map(|pr| {
-            let label = format!("{}#{} {}", prefix_fn(pr), pr.number, pr.title);
+            let label = format!("{}#{} {}", prefix_fn(pr), pr.number, display_title(pr));
             (pr, label, action_fn(pr.url.clone()))
         })
         .collect();
@@ -463,7 +473,7 @@ fn hidden_label(pr: &PullRequest, conditions: &[HideCondition]) -> String {
         "{}#{} {} (waiting for {})",
         review_prefix(pr),
         pr.number,
-        pr.title,
+        display_title(pr),
         waiting.join(", ")
     )
 }
@@ -567,6 +577,21 @@ mod tests {
     }
 
     #[test]
+    fn display_title_tags_stack_then_auto_merge() {
+        let mut pr = make_test_pr(1);
+        assert_eq!(display_title(&pr), "PR 1");
+
+        pr.stack = Some((5, 7));
+        assert_eq!(display_title(&pr), "[5/7] PR 1");
+
+        pr.auto_merge_enabled = true;
+        assert_eq!(display_title(&pr), "[5/7] [A] PR 1");
+
+        pr.stack = None;
+        assert_eq!(display_title(&pr), "[A] PR 1");
+    }
+
+    #[test]
     fn repo_name_extracts_after_slash() {
         assert_eq!(repo_name("owner/repo"), "repo");
         assert_eq!(repo_name("repo"), "repo");
@@ -666,7 +691,9 @@ mod tests {
             has_conflicts: false,
             is_mergeable: false,
             in_merge_queue: false,
+            auto_merge_enabled: false,
             approved_by_other: false,
+            stack: None,
         }
     }
 

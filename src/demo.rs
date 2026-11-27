@@ -3,7 +3,7 @@ use crate::types::*;
 pub fn demo_pull_requests() -> PullRequestGroup {
     PullRequestGroup {
         mine: vec![
-            make_pr(
+            auto_merging(make_pr(
                 1,
                 "demo/app",
                 "Add user authentication",
@@ -11,7 +11,7 @@ pub fn demo_pull_requests() -> PullRequestGroup {
                 Some(CheckStatus::Success),
                 Some(ReviewStatus::Approved),
                 false,
-            ),
+            )),
             make_pr(
                 2,
                 "demo/app",
@@ -21,23 +21,31 @@ pub fn demo_pull_requests() -> PullRequestGroup {
                 None,
                 false,
             ),
-            make_pr(
-                3,
-                "demo/api",
-                "Fix pagination endpoint",
-                false,
-                Some(CheckStatus::Failure),
-                None,
-                false,
+            stacked(
+                make_pr(
+                    3,
+                    "demo/api",
+                    "Fix pagination endpoint",
+                    false,
+                    Some(CheckStatus::Failure),
+                    None,
+                    false,
+                ),
+                1,
+                2,
             ),
-            make_pr(
-                4,
-                "demo/api",
-                "Update dependencies",
-                false,
-                None,
-                None,
-                true,
+            stacked(
+                make_pr(
+                    4,
+                    "demo/api",
+                    "Update dependencies",
+                    false,
+                    None,
+                    None,
+                    true,
+                ),
+                2,
+                2,
             ),
             make_pr(
                 5,
@@ -139,7 +147,9 @@ fn make_pr(
         has_conflicts,
         is_mergeable: !has_conflicts,
         in_merge_queue: false,
+        auto_merge_enabled: false,
         approved_by_other: false,
+        stack: None,
     }
 }
 
@@ -160,6 +170,20 @@ fn re_requested(pr: PullRequest) -> PullRequest {
 fn queued(pr: PullRequest) -> PullRequest {
     PullRequest {
         in_merge_queue: true,
+        ..pr
+    }
+}
+
+fn auto_merging(pr: PullRequest) -> PullRequest {
+    PullRequest {
+        auto_merge_enabled: true,
+        ..pr
+    }
+}
+
+fn stacked(pr: PullRequest, position: u32, size: u32) -> PullRequest {
+    PullRequest {
+        stack: Some((position, size)),
         ..pr
     }
 }

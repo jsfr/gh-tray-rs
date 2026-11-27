@@ -37,8 +37,13 @@ pub struct PullRequest {
     /// computing it, which it does after every push.
     pub is_mergeable: bool,
     pub in_merge_queue: bool,
+    /// Auto-merge is enabled: GitHub merges the PR once its requirements pass.
+    pub auto_merge_enabled: bool,
     /// Someone other than the viewer approved in their latest decisive review.
     pub approved_by_other: bool,
+    /// Position in a PR stack and the stack's size, both counted from 1 and
+    /// counting merged PRs. `None` when the PR is not in a stack.
+    pub stack: Option<(u32, u32)>,
 }
 
 /// A change a hidden Review PR waits for before it comes back.
@@ -178,7 +183,9 @@ mod tests {
             has_conflicts: false,
             is_mergeable: false,
             in_merge_queue: false,
+            auto_merge_enabled: false,
             approved_by_other: false,
+            stack: None,
         }
     }
 }

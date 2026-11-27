@@ -129,6 +129,8 @@ query($searchQuery: String!) {
         }
         mergeable
         isInMergeQueue
+        autoMergeRequest { enabledAt }
+        stackEntry { position stack { size } }
       }
     }
   }
@@ -216,8 +218,17 @@ fn parse_pull_request(node: &serde_json::Value) -> Option<PullRequest> {
         has_conflicts: node["mergeable"].as_str() == Some("CONFLICTING"),
         is_mergeable: node["mergeable"].as_str() == Some("MERGEABLE"),
         in_merge_queue: node["isInMergeQueue"].as_bool().unwrap_or(false),
+        auto_merge_enabled: !node["autoMergeRequest"].is_null(),
         approved_by_other: false,
+        stack: parse_stack(node),
     })
+}
+
+fn parse_stack(node: &serde_json::Value) -> Option<(u32, u32)> {
+    let entry = &node["stackEntry"];
+    let position = entry["position"].as_u64()?;
+    let size = entry["stack"]["size"].as_u64()?;
+    Some((position as u32, size as u32))
 }
 
 fn parse_viewer_review_state(node: &serde_json::Value) -> Option<ViewerReviewState> {
@@ -816,6 +827,35 @@ mod tests {
 
         node["isInMergeQueue"] = true.into();
         assert!(parse_single(&node.to_string(), "me").mine[0].in_merge_queue);
+    }
+
+    #[test]
+    fn parses_auto_merge_flag() {
+        let mut node: serde_json::Value =
+            serde_json::from_str(&review_node("me", "", "", "")).unwrap();
+        assert!(!parse_single(&node.to_string(), "me").mine[0].auto_merge_enabled);
+
+        node["autoMergeRequest"] = serde_json::Value::Null;
+        assert!(!parse_single(&node.to_string(), "me").mine[0].auto_merge_enabled);
+
+        node["autoMergeRequest"] = serde_json::json!({ "enabledAt": "2026-11-27T10:00:00Z" });
+        assert!(parse_single(&node.to_string(), "me").mine[0].auto_merge_enabled);
+    }
+
+    #[test]
+    fn parses_stack_position() {
+        let mut node: serde_json::Value =
+            serde_json::from_str(&review_node("me", "", "", "")).unwrap();
+        assert_eq!(parse_single(&node.to_string(), "me").mine[0].stack, None);
+
+        node["stackEntry"] = serde_json::Value::Null;
+        assert_eq!(parse_single(&node.to_string(), "me").mine[0].stack, None);
+
+        node["stackEntry"] = serde_json::json!({ "position": 5, "stack": { "size": 7 } });
+        assert_eq!(
+            parse_single(&node.to_string(), "me").mine[0].stack,
+            Some((5, 7))
+        );
     }
 
     #[test]
